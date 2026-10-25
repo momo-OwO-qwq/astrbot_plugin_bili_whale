@@ -1,0 +1,298 @@
+{
+  "account": {
+    "type": "object",
+    "description": "B 站账号（只在本机使用）",
+    "hint": "F12 → Application → Cookies → https://www.bilibili.com 手动复制。SESSDATA 是 HttpOnly，别用 document.cookie 取。",
+    "items": {
+      "sessdata": {
+        "type": "string",
+        "description": "SESSDATA",
+        "secret": true,
+        "default": ""
+      },
+      "bili_jct": {
+        "type": "string",
+        "description": "bili_jct（CSRF，发评论要用）",
+        "secret": true,
+        "default": ""
+      },
+      "buvid3": {
+        "type": "string",
+        "description": "buvid3",
+        "default": ""
+      },
+      "owner_mid": {
+        "type": "string",
+        "description": "你的 B 站 UID（仅记录，用于核对）",
+        "default": ""
+      },
+      "owner_name": {
+        "type": "string",
+        "description": "你的 B 站昵称（评论里 @ 用）",
+        "hint": "必须和 B 站当前昵称一致；改名后这里也要改。",
+        "default": ""
+      }
+    }
+  },
+  "rhythm": {
+    "type": "object",
+    "description": "生物钟（什么时候醒）",
+    "items": {
+      "enabled": {
+        "type": "bool",
+        "description": "启用自动刷",
+        "hint": "关掉后只能用手动 /bili 现在刷。",
+        "default": true
+      },
+      "window": {
+        "type": "string",
+        "description": "作息窗口",
+        "hint": "HH:MM-HH:MM，可写多段：12:00-14:00,20:00-24:00。24:00 表示午夜。",
+        "default": "20:00-24:00"
+      },
+      "wakes_per_day": {
+        "type": "int",
+        "description": "每天最多醒几次",
+        "default": 1,
+        "slider": { "min": 0, "max": 6, "step": 1 }
+      },
+      "skip_chance": {
+        "type": "float",
+        "description": "今天不想看的概率",
+        "hint": "0.3 = 三成概率只写日记、不刷视频。",
+        "default": 0.3,
+        "slider": { "min": 0, "max": 1, "step": 0.05 }
+      },
+      "min_gap_min": {
+        "type": "int",
+        "description": "两次唤醒之间至少隔几分钟",
+        "default": 10,
+        "slider": { "min": 1, "max": 120, "step": 1 }
+      }
+    }
+  },
+  "content": {
+    "type": "object",
+    "description": "刷什么 / 读多深",
+    "items": {
+      "keywords": {
+        "type": "list",
+        "description": "关注关键词（一行一个）",
+        "default": ["DeepSeek Harness", "DSH 插件", "dsh 教程"]
+      },
+      "exclude_keywords": {
+        "type": "list",
+        "description": "标题里出现就跳过（广告 / 切片 / 搬运等）",
+        "default": []
+      },
+      "search_days": {
+        "type": "int",
+        "description": "只看最近几天的视频",
+        "default": 7,
+        "slider": { "min": 1, "max": 30, "step": 1 }
+      },
+      "deep_read": {
+        "type": "int",
+        "description": "每轮深读几条",
+        "hint": "深读 = 字幕 + 热评 + 弹幕 + 模型总结；越多越贵。",
+        "default": 3,
+        "slider": { "min": 1, "max": 8, "step": 1 }
+      },
+      "min_duration_sec": {
+        "type": "int",
+        "description": "最短时长（秒），太短的跳过",
+        "default": 60
+      },
+      "max_duration_sec": {
+        "type": "int",
+        "description": "最长时长（秒）",
+        "default": 7200
+      },
+      "subtitle_lang": {
+        "type": "string",
+        "description": "优先字幕语言",
+        "default": "ai-zh"
+      },
+      "danmaku": {
+        "type": "bool",
+        "description": "读弹幕热区",
+        "hint": "没字幕的视频，弹幕能补一点信息；但弹幕不能单独支撑「值得看」。",
+        "default": true
+      },
+      "max_subtitle_chars": {
+        "type": "int",
+        "description": "喂给模型的字幕上限（字符）",
+        "default": 10000
+      }
+    }
+  },
+  "persona": {
+    "type": "object",
+    "description": "它按什么身份说话",
+    "items": {
+      "bot_name": {
+        "type": "string",
+        "description": "角色名",
+        "default": "小鲸"
+      },
+      "call_user": {
+        "type": "string",
+        "description": "怎么称呼你",
+        "default": "你"
+      },
+      "call_self": {
+        "type": "string",
+        "description": "怎么自称",
+        "default": "我"
+      },
+      "text": {
+        "type": "text",
+        "description": "人设正文（留空则中性说话）",
+        "hint": "只会取前 3000 字。建议写：我是谁 / 说话方式 / 我在意什么 / 我绝不会。",
+        "default": ""
+      }
+    }
+  },
+  "report": {
+    "type": "object",
+    "description": "日报",
+    "items": {
+      "detail": {
+        "type": "string",
+        "description": "写多细",
+        "options": ["full", "thin", "none"],
+        "labels": ["完整", "薄版", "不写"],
+        "default": "full"
+      },
+      "push_full": {
+        "type": "bool",
+        "description": "推送时附上完整日报",
+        "default": false
+      }
+    }
+  },
+  "diary": {
+    "type": "object",
+    "description": "两本日记",
+    "items": {
+      "enabled": {
+        "type": "bool",
+        "description": "写日记",
+        "default": true
+      },
+      "push": {
+        "type": "bool",
+        "description": "把日记也推给你",
+        "default": false
+      },
+      "private_only": {
+        "type": "bool",
+        "description": "日记只在私聊里允许查看",
+        "default": true
+      }
+    }
+  },
+  "share": {
+    "type": "object",
+    "description": "分享（在评论区 @ 你）",
+    "items": {
+      "mode": {
+        "type": "string",
+        "description": "分享模式",
+        "options": ["off", "manual", "auto"],
+        "labels": ["关闭", "只预览，手动确认", "自动分享"],
+        "hint": "自动分享 = 生物钟刷完自己发；仍然受评分/理由/每天 ≤3/同视频 7 天限制。",
+        "default": "off"
+      },
+      "min_score": {
+        "type": "int",
+        "description": "分享的最低评分（0-20）",
+        "default": 13,
+        "slider": { "min": 0, "max": 20, "step": 1 }
+      },
+      "max_per_day": {
+        "type": "int",
+        "description": "每天最多分享几条",
+        "default": 3,
+        "slider": { "min": 0, "max": 10, "step": 1 }
+      },
+      "same_video_days": {
+        "type": "int",
+        "description": "同一视频多少天内只分享一次",
+        "default": 7
+      },
+      "min_reason_len": {
+        "type": "int",
+        "description": "分享理由至少多少字",
+        "default": 8
+      }
+    }
+  },
+  "risk": {
+    "type": "object",
+    "description": "请求保护（默认值按新号设定，别乱调大）",
+    "items": {
+      "request_interval_ms": {
+        "type": "int",
+        "description": "两次请求之间至少隔多少毫秒",
+        "hint": "低于 300 会被强制按 300 算；默认 1500 是给新号的。",
+        "default": 1500,
+        "slider": { "min": 300, "max": 5000, "step": 100 }
+      },
+      "read_per_hour": {
+        "type": "int",
+        "description": "每小时读取上限",
+        "default": 600
+      },
+      "read_per_day": {
+        "type": "int",
+        "description": "每天读取上限",
+        "default": 3000
+      },
+      "write_per_hour": {
+        "type": "int",
+        "description": "每小时写入上限（评论）",
+        "default": 12
+      },
+      "write_per_day": {
+        "type": "int",
+        "description": "每天写入上限（评论）",
+        "default": 30
+      },
+      "write_cooldown_sec": {
+        "type": "int",
+        "description": "两次写之间至少隔多少秒",
+        "default": 120
+      }
+    }
+  },
+  "security": {
+    "type": "object",
+    "description": "权限",
+    "items": {
+      "admin_only": {
+        "type": "bool",
+        "description": "群聊里只有管理员能刷/分享/改推送",
+        "hint": "关闭后群里任何人都能触发刷一轮、发评论、改推送目标 —— 不建议关。",
+        "default": true
+      }
+    }
+  },
+  "push": {
+    "type": "object",
+    "description": "主动推送",
+    "items": {
+      "session": {
+        "type": "string",
+        "description": "推送到哪个会话",
+        "hint": "留空 = 用最后一次发指令的会话；发一次 /bili 订阅 会自动填。",
+        "default": ""
+      },
+      "on_wake": {
+        "type": "bool",
+        "description": "刷完主动推送",
+        "default": true
+      }
+    }
+  }
+}
