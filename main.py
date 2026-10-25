@@ -123,6 +123,8 @@ def _err_text(exc: BaseException) -> str:
 
 @register(PLUGIN_NAME, "c1overzz & Alterssss", "养鱼刷B站：生物钟 + 真读字幕 + 日报/日记 + 克制的分享", VERSION)
 class BiliWhalePlugin(Star):
+    """养鱼刷B站：按生物钟替你刷 B 站，读字幕、写日报和两本日记。"""
+
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
         self.config = config if config is not None else {}
@@ -478,6 +480,7 @@ class BiliWhalePlugin(Star):
     # ── 指令 ─────────────────────────────────────────────────────────────
     @filter.command("bili")
     async def bili(self, event: AstrMessageEvent):
+        """养鱼刷B站：状态 / 刷一轮 / 看懂视频 / 日报 / 日记 / 配额 / 分享。"""
         if (self._ticker is None or self._ticker.done()) and as_bool(
             cfg_get(self.config, "rhythm.enabled", True), True
         ):
@@ -615,8 +618,7 @@ class BiliWhalePlugin(Star):
 
         if lower in {"额度", "quota"}:
             guard = TrafficGuard(self.store, lambda: self.config)
-            limits = guard.limits
-            yield event.plain_result("📊 " + guard.status_text() + "\n\n分享：" + quota_mod.format_share_quota(self.store.quota, limits))
+            yield event.plain_result("📊 " + guard.status_text())
             return
 
         if lower in {"分享", "share"}:
