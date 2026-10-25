@@ -20,7 +20,7 @@ from .util import as_str_list, cfg_get, clean_text, human_count, human_duration,
 
 DEFAULT_KEYWORDS = ["DeepSeek Harness", "DSH 插件", "dsh 教程", "B站 教程"]
 
-SYSTEM_TEMPLATE = """你是「{name}」，一个替使用者刷 B 站的助手。使用者把账号交给你，是让你替他挑值得看的东西，不是让你替他社交。
+SYSTEM_TEMPLATE = """{identity}使用者把账号交给你，是让你替他挑值得看的东西，不是让你替他社交。
 
 【你是谁】
 {persona}
@@ -48,9 +48,23 @@ def style_block(cfg: Mapping[str, Any] | Any) -> str:
     return f"称呼使用者为「{call_user}」，自称「{call_self}」。句子短一点，少用感叹号，不用网络烂梗。"
 
 
-def system_prompt(cfg: Mapping[str, Any] | Any) -> str:
+def system_prompt(cfg: Mapping[str, Any] | Any, persona_text: str | None = None) -> str:
+    """组装系统提示词。
+
+    ``persona_text`` 来自 AstrBot 的人格（由 main.py 解析）；为空时退回
+    插件自己的「角色名/称呼/人设正文」配置，保证不装 AstrBot 人格也能用。
+    """
     name = clean_text(cfg_get(cfg, "persona.bot_name", "") or "小鲸", limit=30)
-    return SYSTEM_TEMPLATE.format(name=name, persona=persona_block(cfg), style=style_block(cfg))
+    external = clean_text(persona_text, limit=4000, keep_newlines=True)
+    if external:
+        persona = external
+        identity = "你是一个替使用者刷 B 站的助手。"
+        style = "完全按上面这份人格的称呼、语气和边界说话；下面的规则只补充安全与事实要求。"
+    else:
+        persona = persona_block(cfg)
+        identity = f"你是「{name}」，一个替使用者刷 B 站的助手。"
+        style = style_block(cfg)
+    return SYSTEM_TEMPLATE.format(identity=identity, persona=persona, style=style)
 
 
 def candidate_lines(candidates: Iterable[Video]) -> str:

@@ -85,9 +85,33 @@ def install_stubs() -> None:
 
     star_mod = types.ModuleType("astrbot.api.star")
 
+    class _Meta:
+        id = "webchat"
+        name = "webchat"
+        support_proactive_message = True
+
+    class _Platform:
+        def meta(self):
+            return _Meta()
+
+    class _PlatformManager:
+        platform_insts = [_Platform()]
+
+    class _PersonaManager:
+        def get_persona_v3_by_id(self, persona_id):
+            return {"name": persona_id, "prompt": "STUB_PERSONA"}
+
+        async def get_default_persona_v3(self, umo=None):
+            return {"name": "default", "prompt": "STUB_DEFAULT_PERSONA"}
+
+        async def resolve_selected_persona(self, **kwargs):
+            return None, {"name": "session", "prompt": "STUB_SESSION_PERSONA"}, None, False
+
     class Context:
         def __init__(self):
             self.sent = []
+            self.platform_manager = _PlatformManager()
+            self.persona_manager = _PersonaManager()
 
         async def send_message(self, umo, chain):
             self.sent.append((umo, chain.parts))
@@ -157,8 +181,17 @@ async def main() -> int:
 
             event.message_str = "/bili 订阅"
             replies = await collect(plugin.bili(event))
-            assert plugin.config["push"]["session"] == "stub:FriendMessage:1", replies
+            assert "stub:FriendMessage:1" in plugin.config["push"]["targets"], replies
             assert plugin.config.get("_saved") is True
+
+            event.message_str = "/bili 推送"
+            replies = await collect(plugin.bili(event))
+            assert replies and "推送目标" in replies[0][1], replies
+            assert "webchat" in replies[0][1], replies
+
+            persona = await plugin._resolve_persona("webchat:FriendMessage:1")
+            assert persona == "STUB_SESSION_PERSONA", persona
+            print("OK  persona ->", persona)
 
             # 无 cookie 时不应发网络请求；_push 走 stub 的 send_message
             ok = await plugin._push("测试推送")

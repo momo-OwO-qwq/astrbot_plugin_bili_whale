@@ -3,6 +3,7 @@ import unittest
 from core.models import Material, Subtitle, Video
 from core.prompts import (
     coerce_deep,
+    system_prompt,
     coerce_diary,
     coerce_screen,
     fallback_comment,
@@ -56,6 +57,14 @@ class PromptTest(unittest.TestCase):
         data = coerce_diary({"letter": "信", "diary": "日记", "closing": "结"})
         self.assertEqual(data["letter"], "信")
         self.assertEqual(data["closing"], "结")
+
+    def test_astrbot_persona_overrides_custom_text(self):
+        cfg = {"persona": {"text": "这是插件自定义人设"}}
+        prompt = system_prompt(cfg, "这是 AstrBot 人格正文")
+        self.assertIn("这是 AstrBot 人格正文", prompt)
+        self.assertNotIn("这是插件自定义人设", prompt)
+        fallback = system_prompt(cfg)
+        self.assertIn("这是插件自定义人设", fallback)
 
 
 if __name__ == "__main__":

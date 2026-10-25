@@ -67,9 +67,11 @@ class FakeAPI:
 class FakeChat:
     def __init__(self):
         self.calls = []
+        self.systems = []
 
     async def __call__(self, system, prompt):
         self.calls.append(prompt)
+        self.systems.append(system)
         if "请挑出最多" in prompt:
             import json
 
@@ -99,7 +101,8 @@ class RunnerTest(unittest.IsolatedAsyncioTestCase):
                 make_video("BV1yy411c7mD", "第二条视频", 2),
                 make_video("BV1zz411c7mD", "第三条视频", 3),
             ]
-            runner = Runner(base_config(), FakeAPI(videos), store, chat=FakeChat())
+            chat = FakeChat()
+            runner = Runner(base_config(), FakeAPI(videos), store, chat=chat, persona_text="ASTRBOT_PERSONA")
             result = await runner.run(allow_share=False)
             self.assertEqual(result.scanned, 3)
             self.assertEqual(result.deep, 2)
@@ -111,6 +114,7 @@ class RunnerTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(store.read_diary("self"))
             self.assertEqual(store.seen_count(), 2)
             self.assertIn("刷了 3 条", result.summary)
+            self.assertTrue(any("ASTRBOT_PERSONA" in system for system in chat.systems))
 
     async def test_no_subtitle_never_worth_reading(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -33,6 +33,7 @@ class Limits:
     same_video_days: int = 7
     min_score: int = 13
     min_reason_len: int = 8
+    dm_per_day: int = 3
 
     @classmethod
     def from_config(cls, cfg: Mapping[str, Any] | Any) -> "Limits":
@@ -46,6 +47,7 @@ class Limits:
             same_video_days=as_int(cfg_get(cfg, "share.same_video_days", 7), 7, 1, 365),
             min_score=as_int(cfg_get(cfg, "share.min_score", 13), 13, 0, 20),
             min_reason_len=as_int(cfg_get(cfg, "share.min_reason_len", 8), 8, 1, 200),
+            dm_per_day=as_int(cfg_get(cfg, "push.bili_dm.max_per_day", 3), 3, 0, 20),
         )
 
 
@@ -72,6 +74,7 @@ def normalize(quota: dict[str, Any], now: datetime | None = None) -> dict[str, A
         quota["reads_day"] = 0
         quota["writes_day"] = 0
         quota["shares_day"] = 0
+        quota["dm_day"] = 0
     if quota.get("hour") != hour:
         quota["hour"] = hour
         quota["reads_hour"] = 0
@@ -187,6 +190,24 @@ def record_share(quota: dict[str, Any], bvid: str, now: datetime | None = None) 
     quota.setdefault("share_bv", {})[bvid] = iso(now)
 
 
+def can_dm(quota: dict[str, Any], limits: Limits, now: datetime | None = None) -> Decision:
+    """B 站私信推送的每日上限（写预算和冷却由 TrafficGuard 另管）。"""
+    now = now or now_local()
+    normalize(quota, now)
+    if limits.dm_per_day <= 0:
+        return Decision(False, "B 站私信推送的每日上限是 0")
+    used = int(quota.get("dm_day", 0))
+    if used >= limits.dm_per_day:
+        return Decision(False, f"今天的 B 站私信推送额度已满（{limits.dm_per_day} 条/天）")
+    return Decision(True)
+
+
+def record_dm(quota: dict[str, Any], now: datetime | None = None) -> None:
+    now = now or now_local()
+    normalize(quota, now)
+    quota["dm_day"] = int(quota.get("dm_day", 0)) + 1
+
+
 def hit_risk(
     quota: dict[str, Any],
     code: int | str,
@@ -230,7 +251,8 @@ def status_text(quota: dict[str, Any], limits: Limits, now: datetime | None = No
         f"{quota.get('reads_day', 0)}/{limits.read_per_day} 天\n"
         f"写：{quota.get('writes_hour', 0)}/{limits.write_per_hour} 时 · "
         f"{quota.get('writes_day', 0)}/{limits.write_per_day} 天\n"
-        f"分享：{quota.get('shares_day', 0)}/{limits.share_max_per_day} 条/天"
+        f"分享：{quota.get('shares_day', 0)}/{limits.share_max_per_day} 条/天\n"
+        f"B站私信：{quota.get('dm_day', 0)}/{limits.dm_per_day} 条/天"
     )
 
 

@@ -18,6 +18,7 @@ import hashlib
 import json
 import re
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from typing import Any, Mapping
 from urllib.parse import quote
@@ -32,6 +33,7 @@ UA = (
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 API = "https://api.bilibili.com"
+VC_API = "https://api.vc.bilibili.com"
 REFERER = "https://www.bilibili.com/"
 
 # WBI 混淆表（B 站前端写死的 64 项表）。
@@ -43,7 +45,7 @@ MIXIN_TABLE = [
 ]
 
 RISK_CODES = {-412, -352, -799, -509, -10403, -429, 412, 352, 799, 509, 10403, 429}
-_NOT_LOGGED_IN = {-101, -400, -403}
+_NOT_LOGGED_IN = {-101, -400, -403, -111}
 
 
 def uploader_key(url: str) -> str:
@@ -82,11 +84,14 @@ class BiliAPI:
         guard: TrafficGuard,
         logger: Any = None,
         user_agent: str = UA,
+        dev_id: str = "",
     ):
         self.cookie = {k: str(v or "").strip() for k, v in (cookie or {}).items()}
         self.guard = guard
         self.logger = logger
         self.user_agent = user_agent or UA
+        # B 站私信的稳定设备 ID：必须长期复用，不能每条随机换。
+        self.dev_id = dev_id or ("WEB-" + str(uuid.uuid4()).upper())
         self._session: Any = None
         self._nav: tuple[float, dict[str, Any]] = (0.0, {})
         self._view_cache: dict[str, tuple[float, Video]] = {}
@@ -535,6 +540,108 @@ class BiliAPI:
             for minute, count in sorted(top, key=lambda kv: kv[0])
         ]
         return out
+
+    # ── 关系 / 写：B 站私信 ──────────────────────────────────────────────
+    async def relation(self, mid: int) -> dict[str, Any]:
+        """查询「我 → 对方」的关注关系；attribute=6 表示互关。"""
+        try:
+            target = int(mid)
+        except (TypeError, ValueError) as exc:
+            raise BiliError("无效的 B 站 UID") from exc
+        if target <= 0:
+            raise BiliError("无效的 B 站 UID")
+        payload = await self._get_json(
+            "/x/relation",
+            {"fid": target},
+            referer=f"https://space.bilibili.com/{target}/",
+        )
+        data = payload.get("data")
+        return data if isinstance(data, dict) else {}
+
+    async def send_dm(self, receiver_mid: int, text: str) -> dict[str, Any]:
+        """给指定用户发一条 B 站私信（只用于「推送给主人」）。
+
+        三条限制与上游一致：
+        1. 只能发给调用方指定的 **一个** owner（插件层只传 owner_mid）；
+        2. 不能发给自己；
+        3. 必须互关（attribute=6），否则 B 站会判营销/骚扰。
+
+        写预算、写冷却、412 熔断由 TrafficGuard 统一管。
+        """
+        self._ensure()
+        if not self.has_write_cookie:
+            raise BiliAuthError("缺少 SESSDATA 或 bili_jct，无法发 B 站私信")
+        try:
+            receiver = int(receiver_mid)
+        except (TypeError, ValueError) as exc:
+            raise BiliError("无效的私信收件人 UID") from exc
+        if receiver <= 0:
+            raise BiliError("还没配置私信收件人 UID（owner_mid / push.bili_dm.to_mid）")
+        message = clean_text(text, limit=300, keep_newlines=True)
+        if not message:
+            raise BiliError("私信内容为空")
+        info = await self.login_info()
+        if not info.get("is_login"):
+            raise BiliAuthError("B 站 cookie 未登录或已过期，没法发私信")
+        sender = int(info.get("mid") or 0)
+        if sender and sender == receiver:
+            raise BiliAuthError("不能给自己发私信；B 站私信推送需要第二个号作为收件人")
+        rel = await self.relation(receiver)
+        attribute = int(rel.get("attribute", -1) or -1)
+        if attribute != 6:
+            be = rel.get("be_relation")
+            be_attr = be.get("attribute") if isinstance(be, dict) else None
+            extra = f"，反向 attribute={be_attr}" if be_attr is not None else ""
+            raise BiliAuthError(
+                f"未互关（attribute={attribute}{extra}）：B 站私信要求双方手动互相关注"
+            )
+        await self.guard.before_write()
+        params = {
+            "msg[sender_uid]": str(sender),
+            "msg[receiver_id]": str(receiver),
+            "msg[receiver_type]": "1",
+            "msg[msg_type]": "1",
+            "msg[msg_status]": "0",
+            "msg[timestamp]": str(int(time.time())),
+            "msg[dev_id]": self.dev_id,
+            "msg[content]": json.dumps({"content": message}, ensure_ascii=False),
+            "csrf": self.cookie.get("bili_jct", ""),
+        }
+        body = "&".join(f"{quote(k, safe='')}={quote(str(v), safe='')}" for k, v in params.items())
+        try:
+            async with self._session.post(
+                f"{VC_API}/web_im/v1/web_im/send_msg",
+                data=body.encode("utf-8"),
+                headers={
+                    **self._base_headers("https://message.bilibili.com/"),
+                    "content-type": "application/x-www-form-urlencoded",
+                    "origin": "https://message.bilibili.com",
+                },
+            ) as resp:
+                status = resp.status
+                raw = await resp.text(errors="replace")
+        except Exception as exc:
+            raise BiliError(f"发私信失败：{type(exc).__name__}") from exc
+        if status in (412, 429):
+            minutes = self.guard.hit_risk(status, "发私信被限流")
+            raise BiliRisk(f"发私信被限流（HTTP {status}），已暂停约 {minutes} 分钟", status, minutes)
+        try:
+            payload = json.loads(raw)
+        except ValueError as exc:
+            raise BiliError(f"发私信返回非 JSON（HTTP {status}）") from exc
+        code = payload.get("code")
+        if code in RISK_CODES:
+            minutes = self.guard.hit_risk(code, str(payload.get("message") or ""))
+            raise BiliRisk(f"发私信触发风控 code={code}，已暂停约 {minutes} 分钟", code, minutes)
+        if code != 0:
+            message_text = str(payload.get("message") or "未知原因")
+            if code in _NOT_LOGGED_IN:
+                raise BiliAuthError(
+                    f"发私信失败：登录态/CSRF 无效（code={code}：{message_text}）", code
+                )
+            raise BiliError(f"发私信失败：{message_text}（code={code}）", code)
+        data = payload.get("data")
+        return data if isinstance(data, dict) else {}
 
     # ── 写：发评论 ───────────────────────────────────────────────────────
     async def post_comment(self, aid: int, message: str) -> str:

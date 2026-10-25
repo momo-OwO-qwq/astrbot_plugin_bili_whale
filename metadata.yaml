@@ -1,8 +1,8 @@
 name: astrbot_plugin_bili_whale
 display_name: 养鱼刷B站
-short_desc: 按生物钟替你刷 B 站：读字幕、写日报和两本日记，值得的才 @ 你。
-desc: 把 dsh-bili-scroll 的每日刷视频与 dsh-bili-whale 的生物钟/人设/克制合并成 AstrBot 插件。它会在你设定的窗口里随机醒来，搜关键词、读官方字幕与热评、写日报和两本日记，并按硬性配额决定要不要在评论区 @ 你。
-version: 0.1.0
+short_desc: 按生物钟替你刷 B 站：读字幕、写日报和两本日记，值得的才 @ 你，并推到 AstrBot 多平台/私信。
+desc: 把 dsh-bili-scroll 的每日刷视频与 dsh-bili-whale 的生物钟/人设/克制合并成 AstrBot 插件。它会在你设定的窗口里随机醒来，搜关键词、读官方字幕与热评、写日报和两本日记，按硬性配额决定要不要在评论区 @ 你，并把摘要推到 AstrBot 已配置平台（可选 B 站私信）；人格默认使用 AstrBot 人格。
+version: 0.2.0
 author: c1overzz & Alterssss (AstrBot port)
 repo: "https://github.com/momo-OwO-qwq/astrbot_plugin_bili_whale"
 astrbot_version: ">=4.5.7,<5"

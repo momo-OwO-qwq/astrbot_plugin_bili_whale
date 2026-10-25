@@ -130,6 +130,21 @@
     "type": "object",
     "description": "它按什么身份说话",
     "items": {
+      "source": {
+        "type": "string",
+        "description": "人格来源",
+        "options": ["astrbot", "custom"],
+        "labels": ["AstrBot 人格（推荐）", "插件自定义"],
+        "hint": "AstrBot：使用 AstrBot 里给当前会话/默认设定的人格；自定义：用手填的人设正文。",
+        "default": "astrbot"
+      },
+      "persona_id": {
+        "type": "string",
+        "description": "指定 AstrBot 人格（留空 = 跟随会话/默认）",
+        "hint": "选一个 AstrBot 人格；留空则用当前会话生效的人格，再退回 AstrBot 默认人格。",
+        "default": "",
+        "_special": "select_persona"
+      },
       "bot_name": {
         "type": "string",
         "description": "角色名",
@@ -147,7 +162,7 @@
       },
       "text": {
         "type": "text",
-        "description": "人设正文（留空则中性说话）",
+        "description": "插件自定义人设正文（人格来源=插件自定义时生效）",
         "hint": "只会取前 3000 字。建议写：我是谁 / 说话方式 / 我在意什么 / 我绝不会。",
         "default": ""
       }
@@ -280,18 +295,54 @@
   },
   "push": {
     "type": "object",
-    "description": "主动推送",
+    "description": "主动推送（AstrBot 消息平台 + B 站私信）",
     "items": {
+      "targets": {
+        "type": "list",
+        "description": "AstrBot 推送目标（UMO）",
+        "hint": "一行一个，例如 aiocqhttp:FriendMessage:123456。最省事的做法：在目标会话发 /bili 订阅，会自动加进来；可配多个平台/群。",
+        "default": []
+      },
       "session": {
         "type": "string",
-        "description": "推送到哪个会话",
-        "hint": "留空 = 用最后一次发指令的会话；发一次 /bili 订阅 会自动填。",
+        "description": "旧版单目标（可留空）",
+        "hint": "兼容旧配置；新配置建议用 targets。留空且没有 targets 时，退回最后一次会话。",
         "default": ""
       },
       "on_wake": {
         "type": "bool",
-        "description": "刷完主动推送",
+        "description": "到点刷完主动推送",
         "default": true
+      },
+      "bili_dm": {
+        "type": "object",
+        "description": "B 站私信推送（可选）",
+        "items": {
+          "enabled": {
+            "type": "bool",
+            "description": "额外把摘要发到 B 站私信",
+            "hint": "需要第二个 B 站号作为收件人，且双方互相关注；同一个号不能给自己发。",
+            "default": false
+          },
+          "to_mid": {
+            "type": "string",
+            "description": "私信收件人 UID（留空用 owner_mid）",
+            "hint": "只发给这一个 owner；不提供群发/陌生人发送。",
+            "default": ""
+          },
+          "max_per_day": {
+            "type": "int",
+            "description": "每天最多发几条私信",
+            "hint": "私信风控最凶，默认 3；还会受全局写预算和 120 秒写冷却限制。",
+            "default": 3,
+            "slider": {"min": 0, "max": 10, "step": 1}
+          },
+          "on_manual": {
+            "type": "bool",
+            "description": "手动 /bili 现在刷 时也发私信",
+            "default": false
+          }
+        }
       }
     }
   }

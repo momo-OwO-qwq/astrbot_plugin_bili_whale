@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ try:  # 正常情况：插件作为包加载，使用相对导入。
     from .core import planner, quota as quota_mod
     from .core.bili_api import BiliAPI
     from .core.errors import BiliAuthError, BiliError, BiliRisk, BudgetError
+    from .core.report import build_dm_text
     from .core.runner import Runner
     from .core.store import Store
     from .core.traffic import TrafficGuard
@@ -29,8 +31,10 @@ try:  # 正常情况：插件作为包加载，使用相对导入。
         as_bool,
         as_float,
         as_int,
+        as_str_list,
         cfg_get,
         chunk_text,
+        clean_text,
         extract_bvid,
         now_local,
         today_str,
@@ -44,6 +48,7 @@ except ImportError:  # 兼容"以单文件方式"加载 main.py 的宿主
     from core import planner, quota as quota_mod
     from core.bili_api import BiliAPI
     from core.errors import BiliAuthError, BiliError, BiliRisk, BudgetError
+    from core.report import build_dm_text
     from core.runner import Runner
     from core.store import Store
     from core.traffic import TrafficGuard
@@ -51,15 +56,17 @@ except ImportError:  # 兼容"以单文件方式"加载 main.py 的宿主
         as_bool,
         as_float,
         as_int,
+        as_str_list,
         cfg_get,
         chunk_text,
+        clean_text,
         extract_bvid,
         now_local,
         today_str,
     )
 
 PLUGIN_NAME = "astrbot_plugin_bili_whale"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 HELP_TEXT = """🐟 养鱼刷B站 —— 指令
 
@@ -69,8 +76,9 @@ HELP_TEXT = """🐟 养鱼刷B站 —— 指令
 /bili 搜 关键词     搜几条视频
 /bili 日报 [日期]   看日报（默认今天）
 /bili 日记 [日期]   看两本日记（私聊里更安全）
-/bili 订阅          把「主动推送」绑到当前会话
-/bili 退订          关掉主动推送（指令照常回）
+/bili 订阅          把当前会话加入 AstrBot 推送目标
+/bili 退订          把当前会话从推送目标里移除
+/bili 推送          看 AstrBot 已配置平台 + 当前推送目标
 /bili 体检          登录态 / 依赖 / 模型 / 配额自检
 /bili 额度          看今天读/写/分享额度与熔断状态
 /bili 分享 BV...    生成一条 @ 你的评论预览（不会直接发）
@@ -292,27 +300,72 @@ class BiliWhalePlugin(Star):
         else:
             await self._push(message)
 
-    async def _push_result(self, result: Any) -> None:
-        if not as_bool(cfg_get(self.config, "push.on_wake", True), True):
+    async def _push_result(self, result: Any, manual_umo: str | None = None) -> None:
+        """把一轮结果发到 AstrBot 目标，并按配置发 B 站私信。
+
+        - AstrBot：手动跑只回到触发会话；到点跑发给 push.targets 里所有目标
+          （旧的 push.session 仍兼容；一个都没配时退回最后一次会话）。
+        - B 站私信：独立开关，只发给 owner；默认只在到点跑时发。
+        """
+        manual = bool(manual_umo)
+        if manual:
+            targets = [manual_umo] if manual_umo else []
+        elif as_bool(cfg_get(self.config, "push.on_wake", True), True):
+            targets = self._target_umos()
+        else:
+            targets = []
+
+        if targets:
+            for target in targets:
+                await self._push(result.summary, umo=target)
+                if as_bool(cfg_get(self.config, "report.push_full", False), False) and result.report_path:
+                    try:
+                        text = Path(result.report_path).read_text(encoding="utf-8")
+                    except OSError:
+                        text = ""
+                    if text:
+                        await self._push(text, umo=target, max_chunks=8)
+                if as_bool(cfg_get(self.config, "diary.push", False), False):
+                    for kind in ("owner", "self"):
+                        text = self.store.read_diary(kind)
+                        if text:
+                            title = "给主人的信" if kind == "owner" else "自己的日记"
+                            await self._push(f"📔 {title}\n\n{text}", umo=target, max_chunks=4)
+        elif not manual and as_bool(cfg_get(self.config, "push.on_wake", True), True):
+            logger.warning("[bili-whale] 没有 AstrBot 推送目标：在目标会话发 /bili 订阅，或在配置里填 push.targets")
+
+        await self._push_bili_dm(result, manual=manual)
+
+    async def _push_bili_dm(self, result: Any, manual: bool = False) -> None:
+        """B 站私信推送：只发给 owner，默认不参与手动刷。"""
+        if not as_bool(cfg_get(self.config, "push.bili_dm.enabled", False), False):
             return
-        target = self._target_umo()
-        if not target:
-            logger.warning("[bili-whale] 没有推送目标：先在任何会话发一次 /bili 订阅")
+        if manual and not as_bool(cfg_get(self.config, "push.bili_dm.on_manual", False), False):
             return
-        await self._push(result.summary, umo=target)
-        if as_bool(cfg_get(self.config, "report.push_full", False), False) and result.report_path:
-            try:
-                text = Path(result.report_path).read_text(encoding="utf-8")
-            except OSError:
-                text = ""
-            if text:
-                await self._push(text, umo=target, max_chunks=8)
-        if as_bool(cfg_get(self.config, "diary.push", False), False):
-            for kind in ("owner", "self"):
-                text = self.store.read_diary(kind)
-                if text:
-                    title = "给主人的信" if kind == "owner" else "自己的日记"
-                    await self._push(f"📔 {title}\n\n{text}", umo=target, max_chunks=4)
+        to_mid = str(
+            cfg_get(self.config, "push.bili_dm.to_mid", "")
+            or cfg_get(self.config, "account.owner_mid", "")
+        ).strip()
+        if not to_mid:
+            logger.warning("[bili-whale] B 站私信推送已开启，但没填 owner_mid / push.bili_dm.to_mid")
+            return
+        limits = quota_mod.Limits.from_config(self.config)
+        decision = quota_mod.can_dm(self.store.quota, limits)
+        if not decision:
+            logger.info("[bili-whale] 跳过 B 站私信推送：%s", decision.reason)
+            return
+        try:
+            api = await self._ensure_api()
+            await api.send_dm(int(to_mid), build_dm_text(result))
+            quota_mod.record_dm(self.store.quota)
+            self.store.save()
+            logger.info("[bili-whale] 已把摘要私信推送给 mid %s", to_mid)
+        except BiliRisk as exc:
+            logger.warning("[bili-whale] B 站私信被限流：%s", exc)
+        except BiliError as exc:
+            logger.warning("[bili-whale] B 站私信没发出去：%s", exc)
+        except Exception:
+            logger.exception("[bili-whale] B 站私信推送失败")
 
     # ── AstrBot 接入：配置 / 模型 / 推送 ─────────────────────────────────
     def _cookie_dict(self) -> dict[str, str]:
@@ -335,7 +388,11 @@ class BiliWhalePlugin(Star):
                 except Exception:
                     logger.warning("[bili-whale] 关闭旧网络会话时出错", exc_info=True)
             guard = TrafficGuard(self.store, lambda: self.config)
-            api = BiliAPI(cookie, guard, logger)
+            dev_id = str(self.store.get("bili_dev_id") or "").strip()
+            if not dev_id:
+                dev_id = "WEB-" + str(uuid.uuid4()).upper()
+                self.store.set("bili_dev_id", dev_id)
+            api = BiliAPI(cookie, guard, logger, dev_id=dev_id)
             await api.start()
             self._api = api
             self._cookie_snapshot = cookie
@@ -351,16 +408,90 @@ class BiliWhalePlugin(Star):
             except Exception:
                 logger.warning("[bili-whale] 关闭网络会话时出错", exc_info=True)
 
-    async def _make_runner(self) -> Runner:
+    async def _make_runner(self, umo: str | None = None) -> Runner:
         api = await self._ensure_api()
-        return Runner(self.config, api, self.store, chat=self._chat, logger=logger)
+        persona = await self._resolve_persona(umo or self._primary_umo())
+        return Runner(
+            self.config,
+            api,
+            self.store,
+            chat=self._chat,
+            logger=logger,
+            persona_text=persona,
+        )
 
-    def _target_umo(self) -> str:
-        return str(cfg_get(self.config, "push.session", "") or self.store.get("last_umo") or "")
+    def _configured_targets(self) -> list[str]:
+        """AstrBot 推送目标：push.targets + 旧版 push.session。"""
+        raw = as_str_list(cfg_get(self.config, "push.targets", []))
+        legacy = str(cfg_get(self.config, "push.session", "") or "").strip()
+        if legacy:
+            raw.append(legacy)
+        out: list[str] = []
+        for item in raw:
+            target = str(item or "").strip()
+            # UMO 形如 aiocqhttp:FriendMessage:12345；session_id 里允许有冒号。
+            if target and target.count(":") >= 2 and target not in out:
+                out.append(target)
+        return out
+
+    def _target_umos(self) -> list[str]:
+        targets = self._configured_targets()
+        if targets:
+            return targets
+        last = str(self.store.get("last_umo") or "").strip()
+        return [last] if last else []
+
+    def _primary_umo(self) -> str:
+        targets = self._configured_targets()
+        return targets[0] if targets else str(self.store.get("last_umo") or "")
+
+    async def _resolve_persona(self, umo: str | None) -> str:
+        """从 AstrBot 人格系统取当前生效的人格；失败时退回插件自定义人设。"""
+        custom = clean_text(cfg_get(self.config, "persona.text", ""), limit=3000, keep_newlines=True)
+        source = str(cfg_get(self.config, "persona.source", "astrbot") or "astrbot").strip().lower()
+        if source == "custom":
+            return custom
+        manager = getattr(self.context, "persona_manager", None)
+        if manager is None:
+            return custom
+        persona = None
+        try:
+            persona_id = str(cfg_get(self.config, "persona.persona_id", "") or "").strip()
+            if persona_id:
+                getter = getattr(manager, "get_persona_v3_by_id", None)
+                persona = getter(persona_id) if callable(getter) else None
+            elif umo:
+                resolver = getattr(manager, "resolve_selected_persona", None)
+                if callable(resolver):
+                    try:
+                        _, persona, _, _ = await resolver(
+                            umo=umo,
+                            conversation_persona_id=None,
+                            platform_name=umo.split(":", 1)[0],
+                            provider_settings=None,
+                        )
+                    except Exception:
+                        persona = None
+            if not persona:
+                default_getter = getattr(manager, "get_default_persona_v3", None)
+                if callable(default_getter):
+                    persona = await default_getter(umo or None)
+            prompt = persona.get("prompt") if isinstance(persona, dict) else ""
+            prompt = clean_text(prompt, limit=4000, keep_newlines=True)
+            if prompt:
+                logger.debug(
+                    "[bili-whale] 使用 AstrBot 人格：%s（%s 字）",
+                    persona.get("name") if isinstance(persona, dict) else "?",
+                    len(prompt),
+                )
+                return prompt
+        except Exception:
+            logger.warning("[bili-whale] 读取 AstrBot 人格失败，退回自定义人设", exc_info=True)
+        return custom
 
     async def _chat(self, system: str, prompt: str) -> str | None:
         """优先用 AstrBot 的 llm_generate；失败再退回 provider.text_chat。"""
-        umo = self._target_umo() or None
+        umo = self._primary_umo() or None
         provider_id = None
         try:
             if umo and hasattr(self.context, "get_current_chat_provider_id"):
@@ -414,7 +545,7 @@ class BiliWhalePlugin(Star):
         return None
 
     async def _provider_hint(self) -> str:
-        umo = self._target_umo() or None
+        umo = self._primary_umo() or None
         try:
             if umo and hasattr(self.context, "get_current_chat_provider_id"):
                 pid = await self.context.get_current_chat_provider_id(umo=umo)
@@ -455,7 +586,7 @@ class BiliWhalePlugin(Star):
     async def _push(self, text: str, umo: str | None = None, max_chunks: int = 10) -> bool:
         if not text:
             return False
-        target = umo or self._target_umo()
+        target = umo or self._primary_umo()
         if not target:
             logger.warning("[bili-whale] 没有可用的会话，消息发不出去：%s", text[:80])
             return False
@@ -476,6 +607,56 @@ class BiliWhalePlugin(Star):
                 save()
         except Exception:
             logger.warning("[bili-whale] 保存配置失败", exc_info=True)
+
+    def _push_config(self) -> dict[str, Any]:
+        push = self.config.get("push")
+        if not isinstance(push, dict):
+            push = {}
+            self.config["push"] = push
+        if not isinstance(push.get("targets"), list):
+            push["targets"] = []
+        return push
+
+    def _targets_text(self) -> str:
+        lines = ["📡 AstrBot 已配置的平台"]
+        try:
+            platforms = list(self.context.platform_manager.platform_insts)
+        except Exception:
+            platforms = []
+        if not platforms:
+            lines.append("（没读到平台适配器；确认 AstrBot 里至少启用了一个消息平台）")
+        else:
+            for platform in platforms:
+                try:
+                    meta = platform.meta()
+                except Exception:
+                    continue
+                proactive = getattr(meta, "support_proactive_message", True)
+                lines.append(
+                    f"- {getattr(meta, 'id', '?')} ｜ {getattr(meta, 'name', '?')} ｜ "
+                    f"主动推送：{'✓' if proactive else '✗'}"
+                )
+        targets = self._configured_targets()
+        lines.extend(["", f"📌 当前推送目标（{len(targets)} 个）"])
+        if targets:
+            lines.extend(f"- {target}" for target in targets)
+        else:
+            last = str(self.store.get("last_umo") or "").strip()
+            lines.append("- （没有配置；将退回最后一次会话" + (f"：{last}）" if last else "）"))
+        dm_enabled = as_bool(cfg_get(self.config, "push.bili_dm.enabled", False), False)
+        dm_to = str(
+            cfg_get(self.config, "push.bili_dm.to_mid", "")
+            or cfg_get(self.config, "account.owner_mid", "")
+        ).strip()
+        lines.extend(
+            [
+                "",
+                f"B站私信推送：{'开' if dm_enabled else '关'}"
+                + (f"（收件人 mid {dm_to}）" if dm_enabled and dm_to else ""),
+                "在目标会话发 /bili 订阅 即可加入；/bili 退订 移出当前会话。",
+            ]
+        )
+        return "\n".join(lines)
 
     # ── 指令 ─────────────────────────────────────────────────────────────
     @filter.command("bili")
@@ -501,6 +682,7 @@ class BiliWhalePlugin(Star):
             "现在刷", "刷", "run", "刷一轮",
             "订阅", "subscribe", "退订", "取消订阅", "unsubscribe",
             "体检", "自检", "check", "诊断",
+            "推送", "推送平台", "platforms", "targets",
             "分享", "share", "确认", "confirm", "取消", "cancel",
             "重载", "reload", "状态", "status", "情况",
             "重置计划", "重排", "replan",
@@ -534,7 +716,7 @@ class BiliWhalePlugin(Star):
                 return
             yield event.plain_result(f"🐟 正在读 {bvid}（字幕 + 热评 + 弹幕）…")
             try:
-                runner = await self._make_runner()
+                runner = await self._make_runner(umo)
                 text, _ = await runner.digest(bvid)
                 for chunk in chunk_text(text, size=1500, max_chunks=6):
                     yield event.plain_result(chunk)
@@ -547,7 +729,7 @@ class BiliWhalePlugin(Star):
                 yield event.plain_result("用法：/bili 搜 关键词")
                 return
             try:
-                runner = await self._make_runner()
+                runner = await self._make_runner(umo)
                 videos = await runner.search(arg)
             except Exception as exc:
                 yield event.plain_result(_err_text(exc))
@@ -590,26 +772,38 @@ class BiliWhalePlugin(Star):
             return
 
         if lower in {"订阅", "subscribe"}:
-            push = self.config.get("push")
-            if not isinstance(push, dict):
-                push = {}
-                self.config["push"] = push
-            push["session"] = umo
+            push = self._push_config()
+            targets = as_str_list(push.get("targets", []))
+            if umo not in targets:
+                targets.append(umo)
+            push["targets"] = targets
             push["on_wake"] = True
             self._save_config()
-            yield event.plain_result("✓ 已把主动推送绑到当前会话。到点刷完会发这里。")
+            yield event.plain_result(
+                f"✓ 已把当前会话加入 AstrBot 推送目标（共 {len(self._configured_targets())} 个）。"
+                "到点刷完会发到所有目标。"
+            )
             return
 
         if lower in {"退订", "取消订阅", "unsubscribe"}:
-            push = self.config.get("push")
-            if not isinstance(push, dict):
-                push = {}
-                self.config["push"] = push
-            push["session"] = ""
-            push["on_wake"] = False
+            push = self._push_config()
+            targets = [item for item in as_str_list(push.get("targets", [])) if item != umo]
+            push["targets"] = targets
+            if str(push.get("session") or "").strip() == umo:
+                push["session"] = ""
+            if not targets and not str(push.get("session") or "").strip():
+                push["on_wake"] = False
+            if str(self.store.get("last_umo") or "") == umo:
+                self.store.set("last_umo", "")
             self._save_config()
-            self.store.set("last_umo", "")
-            yield event.plain_result("✓ 已关闭主动推送；/bili 指令仍然照常回。")
+            yield event.plain_result(
+                f"✓ 已把当前会话移出推送目标（还剩 {len(self._configured_targets())} 个）。"
+                "没有目标时不会再主动推。"
+            )
+            return
+
+        if lower in {"推送", "推送平台", "platforms", "targets"}:
+            yield event.plain_result(self._targets_text())
             return
 
         if lower in {"体检", "自检", "check", "诊断"}:
@@ -631,7 +825,7 @@ class BiliWhalePlugin(Star):
                 return
             yield event.plain_result(f"🐟 正在为 {bvid} 写分享评论…")
             try:
-                runner = await self._make_runner()
+                runner = await self._make_runner(umo)
                 payload = await runner.prepare_share(bvid)
             except Exception as exc:
                 yield event.plain_result(_err_text(exc))
@@ -655,7 +849,7 @@ class BiliWhalePlugin(Star):
                 yield event.plain_result("这条分享是在别的会话发起的，回那个会话确认。")
                 return
             try:
-                runner = await self._make_runner()
+                runner = await self._make_runner(umo)
                 rpid = await runner.confirm_share(pending)
             except Exception as exc:
                 yield event.plain_result(_err_text(exc))
@@ -691,7 +885,7 @@ class BiliWhalePlugin(Star):
         if bvid:
             yield event.plain_result(f"🐟 正在读 {bvid}…")
             try:
-                runner = await self._make_runner()
+                runner = await self._make_runner(umo)
                 text, _ = await runner.digest(bvid)
                 for chunk in chunk_text(text, size=1500, max_chunks=6):
                     yield event.plain_result(chunk)
@@ -729,7 +923,7 @@ class BiliWhalePlugin(Star):
         if not event.get_group_id() or self._can_manage(event):
             self.store.record_umo(event.unified_msg_origin)
         try:
-            runner = await self._make_runner()
+            runner = await self._make_runner(event.unified_msg_origin)
             text, _ = await runner.digest(code)
             return text
         except Exception as exc:
@@ -739,15 +933,14 @@ class BiliWhalePlugin(Star):
     async def _manual_run(self, umo: str) -> None:
         async with self._run_lock:
             try:
-                runner = await self._make_runner()
+                runner = await self._make_runner(umo)
                 result = await runner.run(allow_share=False)
             except Exception as exc:
                 await self._push(_err_text(exc), umo=umo)
                 return
-        text = result.summary
         if quota_mod.share_auto_enabled(self.config) and not result.shared:
-            text += "\n（手动刷默认不自动发评论；想分享用 /bili 分享 BV…）"
-        await self._push(text, umo=umo)
+            result.summary += "\n（手动刷默认不自动发评论；想分享用 /bili 分享 BV…）"
+        await self._push_result(result, manual_umo=umo)
 
     async def _status_text(self) -> str:
         now = now_local()
@@ -778,6 +971,19 @@ class BiliWhalePlugin(Star):
         lines.extend(["", guard.status_text()])
         lines.append(f"模型：{await self._provider_hint()}")
         lines.append(f"分享模式：{cfg_get(self.config, 'share.mode', 'off')}")
+        targets = self._configured_targets()
+        lines.append(f"AstrBot 推送目标：{len(targets)} 个" + (f"（{targets[0]}）" if targets else ""))
+        source = str(cfg_get(self.config, "persona.source", "astrbot") or "astrbot")
+        persona_id = str(cfg_get(self.config, "persona.persona_id", "") or "").strip()
+        lines.append(
+            "人格源："
+            + ("AstrBot" + (f"（{persona_id}）" if persona_id else "（跟随会话/默认）") if source == "astrbot" else "插件自定义")
+        )
+        dm_enabled = as_bool(cfg_get(self.config, "push.bili_dm.enabled", False), False)
+        dm_to = str(
+            cfg_get(self.config, "push.bili_dm.to_mid", "") or cfg_get(self.config, "account.owner_mid", "")
+        ).strip()
+        lines.append(f"B站私信推送：{'开' if dm_enabled else '关'}" + (f"（mid {dm_to}）" if dm_enabled and dm_to else ""))
         reports = self.store.list_reports(3)
         if reports:
             lines.append("最近日报：" + "、".join(reports))
@@ -805,6 +1011,37 @@ class BiliWhalePlugin(Star):
         else:
             lines.append("B 站接口：未检查（先填 cookie）")
         lines.append(f"模型：{await self._provider_hint()}")
+        lines.append(f"AstrBot 推送目标：{len(self._configured_targets())} 个")
+        try:
+            platforms = list(self.context.platform_manager.platform_insts)
+            lines.append(f"AstrBot 平台适配器：{len(platforms)} 个")
+        except Exception:
+            lines.append("AstrBot 平台适配器：✗ 读取失败")
+        persona = await self._resolve_persona(self._primary_umo())
+        lines.append(f"人格：{'✓ 取到 ' + str(len(persona)) + ' 字' if persona else '✗ 没取到（会用中性提示词）'}")
+        if as_bool(cfg_get(self.config, "push.bili_dm.enabled", False), False):
+            dm_to = str(
+                cfg_get(self.config, "push.bili_dm.to_mid", "") or cfg_get(self.config, "account.owner_mid", "")
+            ).strip()
+            if not dm_to:
+                lines.append("B站私信：✗ 没填 owner_mid / to_mid")
+            elif not cookie.get("sessdata"):
+                lines.append("B站私信：未检查（先填 cookie）")
+            else:
+                try:
+                    api = await self._ensure_api()
+                    info = await api.login_info()
+                    if str(info.get("mid") or "") == dm_to:
+                        lines.append("B站私信：✗ 收件人就是登录账号（不能给自己发）")
+                    else:
+                        rel = await api.relation(int(dm_to))
+                        attr = int(rel.get("attribute", -1) or -1)
+                        lines.append(
+                            "B站私信："
+                            + ("✓ 互关，可发" if attr == 6 else f"✗ 未互关（attribute={attr}），双方手动关注后才能发")
+                        )
+                except Exception as exc:
+                    lines.append(f"B站私信：✗ 检查失败（{exc}）")
         guard = TrafficGuard(self.store, lambda: self.config)
         lines.append("")
         lines.extend(guard.status_text().splitlines())

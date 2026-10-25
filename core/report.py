@@ -100,6 +100,25 @@ def build_summary(result: RunResult, results: Iterable[DeepResult]) -> str:
     return "\n".join(lines)
 
 
+def build_dm_text(result: RunResult, max_chars: int = 300) -> str:
+    """B 站私信推送的短文本。
+
+    私信风控比评论还敏感，控制在一屏内：只发摘要/标题，不带本机路径、
+    不附完整日报；完整内容留在 AstrBot 会话和日报文件里。
+    """
+    lines = []
+    for line in (result.summary or "").splitlines():
+        if line.startswith("完整日报：") or line.startswith("（分享模式"):
+            continue
+        if line.startswith("另有 "):
+            continue
+        lines.append(line)
+    if not lines:
+        lines.append(f"🐟 今天刷了 {result.scanned} 条，挑中 {result.picked} 条。")
+    lines.append("（完整日报在 AstrBot 里）")
+    return truncate("\n".join(lines), max(80, int(max_chars)))
+
+
 def build_skip_note(day: str, reason: str) -> str:
     return f"# {day} 今天不想看\n\n{reason or '就是不想看，没有理由。'}\n"
 

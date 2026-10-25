@@ -3,6 +3,7 @@ import unittest
 from urllib.parse import parse_qs, urlsplit
 
 from core.bili_api import BiliAPI
+from core.errors import BiliAuthError
 
 
 class FakeGuard:
@@ -86,6 +87,7 @@ class FakeSession:
                 ]
             },
         }
+        self.relation = {"code": 0, "data": {"attribute": 6}}
         self.replies = {
             "code": 0,
             "data": {
@@ -119,12 +121,16 @@ class FakeSession:
             )
         if path == "/x/v2/reply":
             return FakeResponse(self.replies)
+        if path == "/x/relation":
+            return FakeResponse(self.relation)
         if path == "/x.json":
             return FakeResponse({"body": [{"from": 1, "content": "第一句字幕"}, {"from": 2, "content": "第二句字幕"}]})
         return FakeResponse({"code": -404, "message": "not found"}, status=404)
 
     def post(self, url, data=None, headers=None):
         self.requests.append(("POST", url, data, headers))
+        if urlsplit(url).path == "/web_im/v1/web_im/send_msg":
+            return FakeResponse({"code": 0, "data": {"msg_key": "x"}})
         return FakeResponse({"code": 0, "data": {"rpid": 123}})
 
     async def close(self):
@@ -178,6 +184,28 @@ class BiliApiFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("w_rid", query)
         self.assertIn("wts", query)
         self.assertEqual(query["keyword"], ["测试"])
+
+    async def test_send_dm_requires_mutual_follow(self):
+        self.api.dev_id = "WEB-TEST-DEVICE"
+        await self.api.send_dm(99, "今天的摘要")
+        self.assertEqual(self.guard.writes, 1)
+        post = [r for r in self.session.requests if r[0] == "POST"][-1]
+        body = post[2].decode() if isinstance(post[2], bytes) else str(post[2])
+        self.assertIn("msg%5Breceiver_id%5D=99", body)
+        self.assertIn("msg%5Bdev_id%5D=WEB-TEST-DEVICE", body)
+        self.assertIn("csrf=j", body)
+        self.assertIn("%E4%BB%8A%E5%A4%A9%E7%9A%84%E6%91%98%E8%A6%81", body)
+
+    async def test_send_dm_rejects_not_mutual(self):
+        self.session.relation = {"code": 0, "data": {"attribute": 2}}
+        with self.assertRaises(BiliAuthError):
+            await self.api.send_dm(99, "摘要")
+        self.assertEqual(self.guard.writes, 0)
+
+    async def test_send_dm_rejects_self(self):
+        with self.assertRaises(BiliAuthError):
+            await self.api.send_dm(42, "摘要")
+        self.assertEqual(self.guard.writes, 0)
 
     async def test_nav_without_login_is_reported(self):
         self.session.nav = {"code": -101, "message": "账号未登录", "data": {"isLogin": False}}

@@ -72,6 +72,16 @@ class QuotaTest(unittest.TestCase):
         q["shares_day"] = LIMITS.share_max_per_day
         self.assertFalse(quota.can_share(q, LIMITS, "BV1xx411c7mD", 20, "这条讲了具体的东西", NOW))
 
+    def test_dm_daily_cap_and_reset(self):
+        q = fresh()
+        for _ in range(LIMITS.dm_per_day):
+            self.assertTrue(quota.can_dm(q, LIMITS, NOW))
+            quota.record_dm(q, NOW)
+        self.assertFalse(quota.can_dm(q, LIMITS, NOW))
+        later = NOW + timedelta(days=1)
+        self.assertTrue(quota.can_dm(q, LIMITS, later))
+        self.assertEqual(q.get("dm_day"), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

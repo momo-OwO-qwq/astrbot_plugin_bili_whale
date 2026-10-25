@@ -60,12 +60,18 @@ class Runner:
         store: Store,
         chat: ChatFn | None = None,
         logger: Any = None,
+        persona_text: str = "",
     ):
         self.cfg = cfg
         self.api = api
         self.store = store
         self.chat = chat
         self.logger = logger
+        # AstrBot 人格正文（由 main.py 解析），空则退回插件自己的 persona 配置。
+        self.persona_text = persona_text
+
+    def _system(self) -> str:
+        return system_prompt(self.cfg, self.persona_text or None)
 
     # ── 对外：完整一轮 ───────────────────────────────────────────────────
     async def run(self, allow_share: bool = True) -> RunResult:
@@ -220,7 +226,7 @@ class Runner:
             return candidates[:want]
         picks: list[str] = []
         if self.chat:
-            text = await self._ask(system_prompt(self.cfg), screen_prompt(candidates, want, self.cfg))
+            text = await self._ask(self._system(), screen_prompt(candidates, want, self.cfg))
             picks = coerce_screen(parse_json_obj(text), candidates, want)
         by_bvid = {v.bvid: v for v in candidates}
         chosen = [by_bvid[b] for b in picks if b in by_bvid]
@@ -284,7 +290,7 @@ class Runner:
         if not material.has_subtitle and not material.danmaku and len(material.comments) < 3:
             return None
         if use_llm and self.chat:
-            text = await self._ask(system_prompt(self.cfg), deep_prompt(material, self.cfg))
+            text = await self._ask(self._system(), deep_prompt(material, self.cfg))
             result = coerce_deep(parse_json_obj(text), material)
         else:
             result = fallback_deep(material)
@@ -300,7 +306,7 @@ class Runner:
         fallback = "今天刷了一圈，没什么特别想说的。" if not skip else "今天不想看，就这样。"
         data = None
         if self.chat:
-            text = await self._ask(system_prompt(self.cfg), diary_prompt(day, results, self.cfg, skip=skip))
+            text = await self._ask(self._system(), diary_prompt(day, results, self.cfg, skip=skip))
             data = parse_json_obj(text)
         diary = coerce_diary(data, fallback)
         stamp = now_local().strftime("%H:%M")
@@ -334,7 +340,7 @@ class Runner:
             raise BiliError("还没填「你的 B 站昵称」，没法 @ 你；去插件配置里补上")
         comment = ""
         if self.chat:
-            text = await self._ask(system_prompt(self.cfg), comment_prompt(result, self.cfg))
+            text = await self._ask(self._system(), comment_prompt(result, self.cfg))
             comment = sanitize_comment(text or "", owner)
         if not comment:
             comment = fallback_comment(result, owner)
@@ -394,7 +400,7 @@ class Runner:
                 return 0, f"（这次没分享：{write_decision.reason}）"
             comment = ""
             if self.chat:
-                text = await self._ask(system_prompt(self.cfg), comment_prompt(best, self.cfg))
+                text = await self._ask(self._system(), comment_prompt(best, self.cfg))
                 comment = sanitize_comment(text or "", owner)
             if not comment:
                 comment = fallback_comment(best, owner)
@@ -420,7 +426,7 @@ class Runner:
         if not material.has_subtitle and not material.danmaku and len(material.comments) < 3:
             raise BiliError("这条视频没字幕、没弹幕、评论也太少，读不到内容")
         if self.chat:
-            text = await self._ask(system_prompt(self.cfg), deep_prompt(material, self.cfg))
+            text = await self._ask(self._system(), deep_prompt(material, self.cfg))
             result = coerce_deep(parse_json_obj(text), material)
         else:
             result = fallback_deep(material)
