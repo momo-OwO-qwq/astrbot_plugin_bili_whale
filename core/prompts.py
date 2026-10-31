@@ -16,7 +16,7 @@ import re
 from typing import Any, Iterable, Mapping
 
 from .models import DeepResult, Material, Video
-from .util import as_str_list, cfg_get, clean_text, human_count, human_duration, truncate
+from .util import as_int, as_str_list, cfg_get, clean_text, human_count, human_duration, truncate
 
 DEFAULT_KEYWORDS = ["DeepSeek Harness", "DSH 插件", "dsh 教程", "B站 教程"]
 
@@ -156,10 +156,23 @@ def diary_prompt(
 {{"letter":"...","diary":"...","closing":"..."}}"""
 
 
-def comment_prompt(result: DeepResult, cfg: Mapping[str, Any] | Any) -> str:
+NO_AI_RULES = """【写法硬规矩】像人在评论区随口一说，不是推荐文案：
+- 只写一句话，不分点、不换行、不写小标题，不用「首先/其次/另外/总之/综上」；
+- 不用「值得一提/不得不说/强烈推荐/绝对值得/不容错过/安利一下/总结一下」；
+- 不用「这条视频让我……/看完之后我……/真的很有感触」这类开头；
+- 不用 emoji、话题标签、书名号包整句，不加引号；
+- 不喊口号，不用问句结尾求互动。"""
+
+
+def comment_prompt(
+    result: DeepResult,
+    cfg: Mapping[str, Any] | Any,
+    max_chars: int | None = None,
+) -> str:
     owner = clean_text(cfg_get(cfg, "account.owner_name", ""), limit=30)
     if not owner:
         owner = "你"
+    limit = max_chars if max_chars is not None else as_int(cfg_get(cfg, "share.max_chars", 40), 40, 15, 500)
     video = result.video
     return f"""你要在 B 站这条视频下留一条公开评论，把视频分享给使用者，并在开头 @ 他。
 
@@ -169,8 +182,10 @@ UP：{video.author}
 理由：{result.why}
 一句话：{result.one_liner}
 
+{NO_AI_RULES}
+
 要求：
-- 必须以「@{owner}」开头，总长不超过 180 字；
+- 必须以「@{owner}」开头，整条不超过 {limit} 字（含 @ 和名字）；
 - 说一个**具体的**看点或细节，让人知道你是真看了，不是复读标题；
 - 不剧透关键结论，不写“AI 生成”“机器人推荐”，不写链接，不带话题标签；
 - 不承诺任何事，不引战，不冒充作者；
@@ -254,6 +269,7 @@ def coerce_deep(data: dict[str, Any] | None, material: Material) -> DeepResult:
         why=why,
         one_liner=one_liner,
         evidence=evidence,
+        comment_samples=[clean_text(c.text, limit=200) for c in material.comments[:20]],
     )
 
 
@@ -273,6 +289,7 @@ def fallback_deep(material: Material) -> DeepResult:
         why=why,
         one_liner=truncate(clean_text(video.title, limit=38), 38) or video.bvid,
         evidence=material.evidence,
+        comment_samples=[clean_text(c.text, limit=200) for c in material.comments[:20]],
     )
 
 
@@ -290,11 +307,12 @@ def coerce_diary(data: dict[str, Any] | None, fallback_line: str = "") -> dict[s
     return {"letter": letter, "diary": diary, "closing": closing}
 
 
-def sanitize_comment(text: str, owner_name: str = "", max_chars: int = 180) -> str:
+def sanitize_comment(text: str, owner_name: str = "", max_chars: int = 40) -> str:
     value = clean_text(text, keep_newlines=False)
     value = re.sub(r"^```.*?\n?", "", value)
     value = re.sub(r"^(评论|回复|comment)\s*[:：]\s*", "", value, flags=re.IGNORECASE)
     value = re.sub(r"https?://\S+", "", value)
+    value = re.sub(r"@\s+", "@", value)
     value = value.strip().strip('"“”「」')
     value = re.sub(r"\s{2,}", " ", value).strip()
     owner = clean_text(owner_name, limit=30)
@@ -310,10 +328,10 @@ def sanitize_comment(text: str, owner_name: str = "", max_chars: int = 180) -> s
     return value.strip()
 
 
-def fallback_comment(result: DeepResult, owner_name: str) -> str:
+def fallback_comment(result: DeepResult, owner_name: str, max_chars: int = 40) -> str:
     owner = clean_text(owner_name, limit=30) or "你"
     detail = result.one_liner or result.why or result.video.title
-    return sanitize_comment(f"@{owner} 今天刷到这条，{detail}", owner, max_chars=180)
+    return sanitize_comment(f"@{owner} 今天刷到这条，{detail}", owner, max_chars=max_chars)
 
 
 def result_rows(results: Iterable[DeepResult]) -> list[dict[str, Any]]:

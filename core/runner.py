@@ -39,6 +39,7 @@ from .prompts import (
 )
 from .report import VERDICT_ORDER, append_report, build_digest_text, build_report, build_skip_note, build_summary
 from .store import Store
+from .style import style_reason
 from .util import (
     as_bool,
     as_int,
@@ -358,6 +359,39 @@ class Runner:
         return diary["closing"]
 
     # ── 分享（评论区 @ 你）───────────────────────────────────────────────
+    async def _make_comment(self, result: DeepResult) -> str:
+        """生成分享评论；过发布前检查，最多重写一次，仍不过就返回空串。"""
+        owner = str(cfg_get(self.cfg, "account.owner_name", "") or "").strip()
+        if not owner:
+            return ""
+        limit = as_int(cfg_get(self.cfg, "share.max_chars", 40), 40, 15, 500)
+        gate_on = as_bool(cfg_get(self.cfg, "share.style_gate", True), True)
+        history = self.store.recent_comments(30)
+        prompt = comment_prompt(result, self.cfg, limit)
+        rejected = ""
+        reason = ""
+        for attempt in range(2):
+            candidate = ""
+            if self.chat:
+                text = await self._ask(self._system(), prompt)
+                candidate = sanitize_comment(text or "", owner, limit)
+            if not candidate:
+                candidate = fallback_comment(result, owner, limit)
+            if not candidate:
+                break
+            reason = style_reason(candidate, history, result.comment_samples) if gate_on else ""
+            if not reason:
+                return candidate
+            rejected = candidate
+            prompt = (
+                comment_prompt(result, self.cfg, limit)
+                + f"\n\n上一版没通过语感检查（{reason}）：「{rejected}」\n"
+                "重写一句；换开头、换关注点，只写一句口语，别像文案。"
+            )
+        if reason and self.logger:
+            self.logger.info("[bili-whale] 分享评论被发布前检查拦下：%s", reason)
+        return ""
+
     async def prepare_share(self, bvid: str) -> dict[str, Any]:
         if not quota_mod.share_config_enabled(self.cfg):
             raise BiliError("分享已在配置里关闭（share.mode = off）")
@@ -377,12 +411,9 @@ class Runner:
         owner = str(cfg_get(self.cfg, "account.owner_name", "") or "").strip()
         if not owner:
             raise BiliError("还没填「你的 B 站昵称」，没法 @ 你；去插件配置里补上")
-        comment = ""
-        if self.chat:
-            text = await self._ask(self._system(), comment_prompt(result, self.cfg))
-            comment = sanitize_comment(text or "", owner)
+        comment = await self._make_comment(result)
         if not comment:
-            comment = fallback_comment(result, owner)
+            raise BiliError("评论没通过发布前检查（或模型没生成出来），这次先不发")
         return {
             "bvid": video.bvid,
             "aid": video.aid,
@@ -437,12 +468,9 @@ class Runner:
             write_decision = quota_mod.can_write(self.store.quota, limits)
             if not write_decision:
                 return 0, f"（这次没分享：{write_decision.reason}）"
-            comment = ""
-            if self.chat:
-                text = await self._ask(self._system(), comment_prompt(best, self.cfg))
-                comment = sanitize_comment(text or "", owner)
+            comment = await self._make_comment(best)
             if not comment:
-                comment = fallback_comment(best, owner)
+                return 0, "（这次没分享：评论没通过发布前检查）"
             aid = best.video.aid or (await self.api.video_info(best.video.bvid)).aid
             rpid = await self.api.post_comment(aid, comment)
             quota_mod.record_share(self.store.quota, best.video.bvid)
