@@ -36,23 +36,23 @@
   },
   "rhythm": {
     "type": "object",
-    "description": "生物钟（什么时候醒）",
+    "description": "自动刷：频率与上限",
     "items": {
       "enabled": {
         "type": "bool",
-        "description": "启用自动刷",
+        "description": "启用到点自动刷",
         "hint": "关掉后只能用手动 /bili 现在刷。",
         "default": true
       },
       "window": {
         "type": "string",
-        "description": "作息窗口",
+        "description": "到点刷的时间窗口",
         "hint": "HH:MM-HH:MM，可写多段：12:00-14:00,20:00-24:00。24:00 表示午夜。",
         "default": "20:00-24:00"
       },
       "wakes_per_day": {
         "type": "int",
-        "description": "每天最多醒几次",
+        "description": "每天最多醒来几次",
         "default": 1,
         "slider": {
           "min": 0,
@@ -73,7 +73,7 @@
       },
       "min_gap_min": {
         "type": "int",
-        "description": "两次唤醒之间至少隔几分钟",
+        "description": "两次醒来至少隔几分钟",
         "default": 10,
         "slider": {
           "min": 1,
@@ -83,47 +83,67 @@
       },
       "manual_max": {
         "type": "int",
-        "description": "手动 /bili 现在刷 最多深读几条",
+        "description": "手动刷最多深读几条",
         "hint": "手动轮不占自动额度，默认只挑 3 条以内。",
-        "default": 3
+        "default": 3,
+        "slider": {
+          "min": 1,
+          "max": 8,
+          "step": 1
+        }
       },
       "manual_cooldown_min": {
         "type": "int",
-        "description": "两次手动刷之间至少隔几分钟",
+        "description": "两次手动刷至少隔几分钟",
         "hint": "防手滑狂点、防烧 token。",
-        "default": 10
+        "default": 10,
+        "slider": {
+          "min": 0,
+          "max": 120,
+          "step": 1
+        }
       },
       "run_timeout_min": {
         "type": "int",
         "description": "一轮最多跑多久（分钟）",
         "hint": "超时自动结束并发消息说明；防止模型/网络卡死。",
-        "default": 20
+        "default": 20,
+        "slider": {
+          "min": 1,
+          "max": 120,
+          "step": 1
+        }
       }
     }
   },
   "content": {
     "type": "object",
-    "description": "刷什么 / 读多深",
+    "description": "刷什么：来源、筛选和阅读深度",
     "items": {
       "keywords": {
         "type": "list",
-        "description": "关注关键词（留空 = 只看首页推荐流）",
-        "hint": "一行一个；最多用前 6 个。",
+        "description": "关注关键词（一行一个）",
         "default": [
           "DeepSeek Harness",
           "DSH 插件",
           "dsh 教程"
-        ]
+        ],
+        "hint": "留空时会刷账号首页推荐流；最多用前 6 个。"
       },
       "exclude_keywords": {
         "type": "list",
-        "description": "标题出现就跳过（广告 / 切片 / 搬运等）",
+        "description": "标题出现这些词就跳过（广告/切片/搬运等）",
         "default": []
       },
       "search_days": {
         "type": "int",
         "description": "只看最近几天的视频",
-        "default": 7
+        "default": 7,
+        "slider": {
+          "min": 1,
+          "max": 30,
+          "step": 1
+        }
       },
       "deep_read": {
         "type": "int",
@@ -138,7 +158,7 @@
       },
       "min_duration_sec": {
         "type": "int",
-        "description": "最短时长（秒），太短的跳过",
+        "description": "最短时长（秒），太短跳过",
         "default": 60
       },
       "max_duration_sec": {
@@ -164,18 +184,18 @@
       },
       "source": {
         "type": "string",
-        "description": "视频从哪来",
+        "description": "视频来源",
         "options": [
           "auto",
           "keywords",
           "recommend"
         ],
         "labels": [
-          "自动（有词搜索，没词看推荐）",
-          "只用关键词",
+          "自动（有词搜索，没词推荐）",
+          "只用关键词搜索",
           "只刷首页推荐"
         ],
-        "hint": "推荐流按账号画像走，不会所有用户刷同一批；关键词留空时自动用推荐。",
+        "hint": "自动：有关键词就搜索，没关键词就刷推荐；也可强制只用关键词或只刷推荐。",
         "default": "auto"
       },
       "search_order": {
@@ -189,8 +209,8 @@
         ],
         "labels": [
           "最新",
-          "播放最多",
-          "弹幕最多",
+          "播放",
+          "弹幕",
           "综合"
         ],
         "default": "pubdate"
@@ -198,14 +218,19 @@
       "search_pages": {
         "type": "int",
         "description": "每个关键词翻几页",
-        "hint": "一页约 20~30 条；默认 2 页。",
-        "default": 2
+        "hint": "一页约 20~30 条；默认 2 页，候选更多但请求也更多。",
+        "default": 2,
+        "slider": {
+          "min": 1,
+          "max": 5,
+          "step": 1
+        }
       }
     }
   },
   "persona": {
     "type": "object",
-    "description": "它按什么身份说话",
+    "description": "说话风格",
     "items": {
       "source": {
         "type": "string",
@@ -223,7 +248,7 @@
       },
       "persona_id": {
         "type": "string",
-        "description": "指定 AstrBot 人格（留空 = 跟随会话/默认）",
+        "description": "指定 AstrBot 人格（留空跟随会话/默认）",
         "hint": "选一个 AstrBot 人格；留空则用当前会话生效的人格，再退回 AstrBot 默认人格。",
         "default": "",
         "_special": "select_persona"
@@ -245,19 +270,20 @@
       },
       "text": {
         "type": "text",
-        "description": "插件自定义人设正文（人格来源=插件自定义时生效）",
+        "description": "插件自定义人设正文（人格来源=自定义时生效）",
         "hint": "只会取前 3000 字。建议写：我是谁 / 说话方式 / 我在意什么 / 我绝不会。",
         "default": ""
       }
     }
   },
-  "report": {
+  "output": {
     "type": "object",
-    "description": "日报",
+    "description": "日报与日记",
     "items": {
-      "detail": {
+      "report_detail": {
         "type": "string",
-        "description": "写多细",
+        "description": "日报写多细",
+        "hint": "完整：每条都有标题/UP/链接/档位/理由/看点；薄版：一行档位加一句理由；不写：只推送摘要。",
         "options": [
           "full",
           "thin",
@@ -270,57 +296,58 @@
         ],
         "default": "full"
       },
-      "push_full": {
+      "push_full_report": {
         "type": "bool",
         "description": "推送时附上完整日报",
+        "hint": "默认只推摘要；打开后把整份日报也发到推送目标。",
         "default": false
-      }
-    }
-  },
-  "diary": {
-    "type": "object",
-    "description": "两本日记",
-    "items": {
-      "enabled": {
+      },
+      "diary_enabled": {
         "type": "bool",
-        "description": "写日记",
+        "description": "写两本日记",
+        "hint": "用当前人格写：一封给你的信 + 一篇只给它自己的日记；不开就不生成。",
         "default": true
       },
-      "push": {
+      "push_diary": {
         "type": "bool",
         "description": "把日记也推给你",
+        "hint": "私密内容，默认不推；只在你自己的推送目标里可见。",
         "default": false
       },
-      "private_only": {
+      "diary_private_only": {
         "type": "bool",
         "description": "日记只在私聊里允许查看",
+        "hint": "打开后群聊里 /bili 日记 会被拒绝，避免隐私外泄。",
         "default": true
       }
     }
   },
   "share": {
     "type": "object",
-    "description": "分享（在评论区 @ 你）",
+    "description": "评论分享（发不发、是否自动、发多少）",
     "items": {
-      "mode": {
-        "type": "string",
-        "description": "分享模式",
-        "options": [
-          "off",
-          "manual",
-          "auto"
-        ],
-        "labels": [
-          "关闭",
-          "只预览，手动确认",
-          "自动分享"
-        ],
-        "hint": "自动分享 = 生物钟刷完自己发；仍然受评分/理由/每天 ≤3/同视频 7 天限制。",
-        "default": "off"
+      "enabled": {
+        "type": "bool",
+        "description": "允许在评论区分享",
+        "hint": "关闭后 /bili 分享、确认和自动发送都不执行。",
+        "default": false
+      },
+      "auto_send": {
+        "type": "bool",
+        "description": "自动发送（不再逐条确认）",
+        "hint": "打开后，到点刷、/bili 现在刷、/bili 分享 都直接发；关闭时只生成预览，需要 /bili 确认。",
+        "default": false
+      },
+      "auto_on_manual": {
+        "type": "bool",
+        "description": "手动刷也自动发送",
+        "hint": "只在「自动发送」开启时生效；关闭后 /bili 现在刷 只读不发。",
+        "default": true
       },
       "min_score": {
         "type": "int",
-        "description": "分享的最低评分（0-20）",
+        "description": "最低评分（0-20）",
+        "hint": "低于这个分数不分享；分值越高越克制。",
         "default": 13,
         "slider": {
           "min": 0,
@@ -345,7 +372,8 @@
       },
       "min_reason_len": {
         "type": "int",
-        "description": "分享理由至少多少字",
+        "description": "分享理由至少几个字",
+        "hint": "说不清为什么值得就不发。",
         "default": 8
       },
       "max_chars": {
@@ -364,16 +392,139 @@
         "description": "发布前做去 AI 味 / 防撞车检查",
         "hint": "拦开头八股、和自己以前评论太像、和该视频热评太像；命中会重写一次，仍不过就不发。",
         "default": true
+      },
+      "mode": {
+        "type": "string",
+        "invisible": true,
+        "description": "旧版发送方式（已迁移，勿改）",
+        "options": [
+          "off",
+          "manual",
+          "auto"
+        ],
+        "labels": [
+          "关闭",
+          "先预览，手动确认",
+          "自动发送（不逐条审核）"
+        ],
+        "default": "off"
+      }
+    }
+  },
+  "push": {
+    "type": "object",
+    "description": "消息推送（AstrBot 平台 + B 站私信）",
+    "items": {
+      "targets": {
+        "type": "list",
+        "description": "AstrBot 推送目标（UMO）",
+        "hint": "一行一个，例如 aiocqhttp:FriendMessage:123456。最省事：在目标会话发 /bili 订阅，会自动加进来；可配多个平台/群。",
+        "default": []
+      },
+      "session": {
+        "type": "string",
+        "invisible": true,
+        "description": "旧版单目标（已迁移到 targets）",
+        "hint": "兼容旧配置；新配置请用 targets。",
+        "default": ""
+      },
+      "on_wake": {
+        "type": "bool",
+        "description": "到点刷完主动推送结果",
+        "default": true,
+        "hint": "手动 /bili 现在刷 总会回到触发会话。"
+      },
+      "bili_dm": {
+        "type": "object",
+        "description": "B 站私信推送（可选）",
+        "items": {
+          "enabled": {
+            "type": "bool",
+            "description": "额外把摘要发到 B 站私信",
+            "hint": "需要第二个 B 站号作为收件人，且双方互相关注；同一个号不能给自己发。",
+            "default": false
+          },
+          "to_mid": {
+            "type": "string",
+            "description": "私信收件人 UID（留空用 owner_mid）",
+            "hint": "只发给这一个 owner；不提供群发/陌生人发送。",
+            "default": ""
+          },
+          "max_per_day": {
+            "type": "int",
+            "description": "每天最多发几条私信",
+            "hint": "私信风控最凶，默认 3；还会受全局写预算和 120 秒写冷却限制。",
+            "default": 3,
+            "slider": {
+              "min": 0,
+              "max": 10,
+              "step": 1
+            }
+          },
+          "on_manual": {
+            "type": "bool",
+            "description": "手动 /bili 现在刷 时也发私信",
+            "default": false
+          }
+        }
+      }
+    }
+  },
+  "llm": {
+    "type": "object",
+    "description": "自然语言对话",
+    "items": {
+      "enabled": {
+        "type": "bool",
+        "description": "启用自然语言 B 站能力",
+        "default": true,
+        "hint": "关掉后只用 /bili 指令。"
+      },
+      "inject_prompt": {
+        "type": "bool",
+        "description": "把「本机有 B 站能力」写进系统提示",
+        "default": true,
+        "hint": "让模型知道可以搜索、读视频/评论/日记，不会编造。"
+      },
+      "allow_tools": {
+        "type": "bool",
+        "description": "允许模型调用只读工具",
+        "default": true,
+        "hint": "搜索/看视频/评论/日记/状态；写操作永远不交给模型。"
+      },
+      "provider_id": {
+        "type": "string",
+        "description": "刷 B 站时用哪个模型（留空跟随会话）",
+        "default": "",
+        "_special": "select_provider",
+        "hint": "只影响插件内部生成，不影响普通聊天。"
+      },
+      "max_chars": {
+        "type": "int",
+        "description": "工具结果喂回模型的字数上限",
+        "default": 900,
+        "slider": {
+          "min": 200,
+          "max": 4000,
+          "step": 100
+        },
+        "hint": "防止长内容撑爆上下文。"
+      },
+      "allow_write_tools": {
+        "type": "bool",
+        "description": "允许模型真实发评论 / 私信",
+        "hint": "打开后模型可以调用发评论和发私信工具；只建议在私聊或管理员会话使用。",
+        "default": false
       }
     }
   },
   "risk": {
     "type": "object",
-    "description": "请求保护（默认值按新号设定，别乱调大）",
+    "description": "请求保护（默认按新号设定，别随意调大）",
     "items": {
       "request_interval_ms": {
         "type": "int",
-        "description": "两次请求之间至少隔多少毫秒",
+        "description": "两次请求至少隔多少毫秒",
         "hint": "低于 300 会被强制按 300 算；默认 1500 是给新号的。",
         "default": 1500,
         "slider": {
@@ -416,64 +567,155 @@
       "admin_only": {
         "type": "bool",
         "description": "群聊里只有管理员能刷/分享/改推送",
-        "hint": "关闭后群里任何人都能触发刷一轮、发评论、改推送目标 —— 不建议关。",
+        "hint": "关闭后群里任何人都能触发刷一轮、发评论、改推送目标，不建议关闭。",
         "default": true
       }
     }
   },
-  "push": {
+  "report": {
     "type": "object",
-    "description": "主动推送（AstrBot 消息平台 + B 站私信）",
+    "description": "旧版日报设置（已合并到「产出」；保留用于迁移）",
     "items": {
-      "targets": {
-        "type": "list",
-        "description": "AstrBot 推送目标（UMO）",
-        "hint": "一行一个，例如 aiocqhttp:FriendMessage:123456。最省事的做法：在目标会话发 /bili 订阅，会自动加进来；可配多个平台/群。",
-        "default": []
-      },
-      "session": {
+      "detail": {
         "type": "string",
-        "description": "旧版单目标（可留空）",
-        "hint": "兼容旧配置；新配置建议用 targets。留空且没有 targets 时，退回最后一次会话。",
-        "default": ""
+        "description": "写多细",
+        "options": [
+          "full",
+          "thin",
+          "none"
+        ],
+        "labels": [
+          "完整",
+          "薄版",
+          "不写"
+        ],
+        "default": "full"
       },
-      "on_wake": {
+      "push_full": {
         "type": "bool",
-        "description": "到点刷完主动推送",
+        "description": "推送时附上完整日报",
+        "hint": "默认只推摘要；打开后把整份日报也发到推送目标。",
+        "default": false
+      }
+    },
+    "invisible": true
+  },
+  "diary": {
+    "type": "object",
+    "description": "旧版日记设置（已合并到「产出」；保留用于迁移）",
+    "items": {
+      "enabled": {
+        "type": "bool",
+        "description": "写日记",
         "default": true
       },
-      "bili_dm": {
-        "type": "object",
-        "description": "B 站私信推送（可选）",
-        "items": {
-          "enabled": {
-            "type": "bool",
-            "description": "额外把摘要发到 B 站私信",
-            "hint": "需要第二个 B 站号作为收件人，且双方互相关注；同一个号不能给自己发。",
-            "default": false
-          },
-          "to_mid": {
-            "type": "string",
-            "description": "私信收件人 UID（留空用 owner_mid）",
-            "hint": "只发给这一个 owner；不提供群发/陌生人发送。",
-            "default": ""
-          },
-          "max_per_day": {
-            "type": "int",
-            "description": "每天最多发几条私信",
-            "hint": "私信风控最凶，默认 3；还会受全局写预算和 120 秒写冷却限制。",
-            "default": 3,
-            "slider": {
-              "min": 0,
-              "max": 10,
-              "step": 1
-            }
-          },
-          "on_manual": {
-            "type": "bool",
-            "description": "手动 /bili 现在刷 时也发私信",
-            "default": false
-          }
+      "push": {
+        "type": "bool",
+        "description": "把日记也推给你",
+        "hint": "私密内容，默认不推；只在你自己的推送目标里可见。",
+        "default": false
+      },
+      "private_only": {
+        "type": "bool",
+        "description": "日记只在私聊里允许查看",
+        "hint": "打开后群聊里 /bili 日记 会被拒绝，避免隐私外泄。",
+        "default": true
+      }
+    },
+    "invisible": true
+  },
+  "memory": {
+    "type": "object",
+    "description": "长期记忆（LivingMemory）",
+    "hint": "不是每条都记：分数够高直接记，中等分数按概率记，模型觉得很有意思也会记。",
+    "items": {
+      "enabled": {
+        "type": "bool",
+        "description": "启用记忆联动",
+        "hint": "需要安装并启用 LivingMemory 插件；没装时自动跳过，不影响刷视频。",
+        "default": true
+      },
+      "auto_write": {
+        "type": "bool",
+        "description": "每轮自动写一条观看记忆",
+        "hint": "一轮最多写一条，同一天同一个视频不重复写。",
+        "default": true
+      },
+      "min_score": {
+        "type": "int",
+        "description": "低于这个分数不记",
+        "hint": "0-20 分；默认 13，和「值得看」的线一致。",
+        "default": 13,
+        "slider": {
+          "min": 0,
+          "max": 20,
+          "step": 1
+        }
+      },
+      "strong_score": {
+        "type": "int",
+        "description": "达到这个分数直接记",
+        "hint": "0-20 分；默认 16，特别好的直接进长期记忆。",
+        "default": 16,
+        "slider": {
+          "min": 0,
+          "max": 20,
+          "step": 1
+        }
+      },
+      "chance": {
+        "type": "float",
+        "description": "中等分数被记住的概率",
+        "hint": "0-1；默认 0.35。分数在「不记」和「直接记」之间时，按这个概率随机决定。",
+        "default": 0.35,
+        "slider": {
+          "min": 0,
+          "max": 1,
+          "step": 0.05
+        }
+      },
+      "interesting_threshold": {
+        "type": "float",
+        "description": "「有意思」的打分门槛",
+        "hint": "0-1；默认 0.8。模型读完后给这条视频打一个有趣程度，超过就必记。",
+        "default": 0.8,
+        "slider": {
+          "min": 0,
+          "max": 1,
+          "step": 0.05
+        }
+      },
+      "max_per_day": {
+        "type": "int",
+        "description": "每天最多写几条记忆",
+        "hint": "默认 3；防止把整轮结果都灌进长期记忆。",
+        "default": 3,
+        "slider": {
+          "min": 0,
+          "max": 10,
+          "step": 1
+        }
+      },
+      "importance": {
+        "type": "float",
+        "description": "写入的重要性",
+        "hint": "0-1；越高越不容易被遗忘和衰减覆盖。",
+        "default": 0.65,
+        "slider": {
+          "min": 0,
+          "max": 1,
+          "step": 0.05
+        }
+      },
+      "max_chars": {
+        "type": "int",
+        "description": "单条记忆最多多少字",
+        "hint": "默认 500；超长会截断，别把整篇字幕塞进去。",
+        "default": 500,
+        "slider": {
+          "min": 100,
+          "max": 2000,
+          "step": 50
         }
       }
     }

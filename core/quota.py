@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Mapping
 
-from .util import as_int, cfg_get, iso, now_local, parse_iso, today_str
+from .util import as_bool, as_int, cfg_get, iso, now_local, parse_iso, today_str
 
 # B 站风控/限流码：撞到就停手，不硬顶。
 RISK_CODES = {-412, -352, -799, -509, -10403, -429, 412, 352, 799, 509, 10403, 429}
@@ -261,16 +261,24 @@ def effective_pubdate_days(days: int) -> int:
 
 
 def share_config_enabled(cfg: Mapping[str, Any] | Any) -> bool:
+    enabled = cfg_get(cfg, "share.enabled", None)
+    if enabled is not None:
+        return as_bool(enabled, False)
     mode = str(cfg_get(cfg, "share.mode", "off") or "off").strip().lower()
     return mode in {"auto", "manual"}
 
 
 def share_auto_enabled(cfg: Mapping[str, Any] | Any) -> bool:
+    if not share_config_enabled(cfg):
+        return False
+    auto = cfg_get(cfg, "share.auto_send", None)
+    if auto is not None:
+        return as_bool(auto, False)
     return str(cfg_get(cfg, "share.mode", "off") or "off").strip().lower() == "auto"
 
 
 def share_manual_enabled(cfg: Mapping[str, Any] | Any) -> bool:
-    return str(cfg_get(cfg, "share.mode", "off") or "off").strip().lower() in {"auto", "manual"}
+    return share_config_enabled(cfg)
 
 
 def format_share_quota(quota: dict[str, Any], limits: Limits) -> str:
