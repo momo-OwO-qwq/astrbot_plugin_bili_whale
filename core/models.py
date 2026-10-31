@@ -173,6 +173,8 @@ class DeepResult:
     why: str = ""
     one_liner: str = ""
     evidence: list[str] = field(default_factory=list)
+    # 发评论前做「撞热评」检查用；由 coerce_deep 从 material.comments 带过来。
+    comment_samples: list[str] = field(default_factory=list)
 
     VERDICTS = ("值得看", "可以看", "不值当")
 
@@ -186,6 +188,7 @@ class DeepResult:
             why=self.why.strip(),
             one_liner=self.one_liner.strip(),
             evidence=list(self.evidence),
+            comment_samples=list(self.comment_samples),
         )
 
 

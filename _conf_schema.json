@@ -329,6 +329,23 @@
         "type": "int",
         "description": "分享理由至少多少字",
         "default": 8
+      },
+      "max_chars": {
+        "type": "int",
+        "description": "评论最多几个字",
+        "hint": "默认 40。越短越像人；超过 100 容易写成总结。",
+        "default": 40,
+        "slider": {
+          "min": 15,
+          "max": 200,
+          "step": 5
+        }
+      },
+      "style_gate": {
+        "type": "bool",
+        "description": "发布前做去 AI 味 / 防撞车检查",
+        "hint": "拦开头八股、和自己以前评论太像、和该视频热评太像；命中会重写一次，仍不过就不发。",
+        "default": true
       }
     }
   },
