@@ -24,6 +24,15 @@ class ConfigSchemaTest(unittest.TestCase):
             if options and labels:
                 self.assertEqual(len(options), len(labels), key)
 
+    def test_share_switches_are_visible(self):
+        schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
+        items = schema["share"]["items"]
+        self.assertEqual(list(items)[:3], ["enabled", "auto_send", "auto_on_manual"])
+        self.assertTrue(items["mode"].get("invisible"))
+        for key in ("enabled", "auto_send", "auto_on_manual"):
+            self.assertFalse(items[key].get("invisible", False), key)
+            self.assertTrue(items[key].get("description"), key)
+
     def test_required_metadata_exists(self):
         text = (ROOT / "metadata.yaml").read_text(encoding="utf-8")
         for field in ("name: astrbot_plugin_bili_whale", "version:", "author:", "desc:"):
