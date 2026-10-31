@@ -80,6 +80,24 @@
           "max": 120,
           "step": 1
         }
+      },
+      "manual_max": {
+        "type": "int",
+        "description": "手动 /bili 现在刷 最多深读几条",
+        "hint": "手动轮不占自动额度，默认只挑 3 条以内。",
+        "default": 3
+      },
+      "manual_cooldown_min": {
+        "type": "int",
+        "description": "两次手动刷之间至少隔几分钟",
+        "hint": "防手滑狂点、防烧 token。",
+        "default": 10
+      },
+      "run_timeout_min": {
+        "type": "int",
+        "description": "一轮最多跑多久（分钟）",
+        "hint": "超时自动结束并发消息说明；防止模型/网络卡死。",
+        "default": 20
       }
     }
   },
