@@ -89,7 +89,8 @@
     "items": {
       "keywords": {
         "type": "list",
-        "description": "关注关键词（一行一个）",
+        "description": "关注关键词（留空 = 只看首页推荐流）",
+        "hint": "一行一个；最多用前 6 个。",
         "default": [
           "DeepSeek Harness",
           "DSH 插件",
@@ -98,18 +99,13 @@
       },
       "exclude_keywords": {
         "type": "list",
-        "description": "标题里出现就跳过（广告 / 切片 / 搬运等）",
+        "description": "标题出现就跳过（广告 / 切片 / 搬运等）",
         "default": []
       },
       "search_days": {
         "type": "int",
         "description": "只看最近几天的视频",
-        "default": 7,
-        "slider": {
-          "min": 1,
-          "max": 30,
-          "step": 1
-        }
+        "default": 7
       },
       "deep_read": {
         "type": "int",
@@ -147,6 +143,45 @@
         "type": "int",
         "description": "喂给模型的字幕上限（字符）",
         "default": 10000
+      },
+      "source": {
+        "type": "string",
+        "description": "视频从哪来",
+        "options": [
+          "auto",
+          "keywords",
+          "recommend"
+        ],
+        "labels": [
+          "自动（有词搜索，没词看推荐）",
+          "只用关键词",
+          "只刷首页推荐"
+        ],
+        "hint": "推荐流按账号画像走，不会所有用户刷同一批；关键词留空时自动用推荐。",
+        "default": "auto"
+      },
+      "search_order": {
+        "type": "string",
+        "description": "关键词搜索排序",
+        "options": [
+          "pubdate",
+          "click",
+          "dm",
+          "totalrank"
+        ],
+        "labels": [
+          "最新",
+          "播放最多",
+          "弹幕最多",
+          "综合"
+        ],
+        "default": "pubdate"
+      },
+      "search_pages": {
+        "type": "int",
+        "description": "每个关键词翻几页",
+        "hint": "一页约 20~30 条；默认 2 页。",
+        "default": 2
       }
     }
   },
