@@ -82,7 +82,7 @@ except ImportError:  # 兼容"以单文件方式"加载 main.py 的宿主
     )
 
 PLUGIN_NAME = "astrbot_plugin_bili_whale"
-VERSION = "0.4.0"
+VERSION = "0.1.0"
 
 HELP_TEXT = """🐟 养鱼刷B站 —— 指令
 
@@ -169,7 +169,7 @@ def _err_text(exc: BaseException) -> str:
     return f"❌ 出了个内部错误（{type(exc).__name__}），详情看 AstrBot 日志。"
 
 
-@register(PLUGIN_NAME, "c1overzz & Alterssss", "养鱼刷B站：生物钟 + 真读字幕 + 日报/日记 + 克制的分享", VERSION)
+@register(PLUGIN_NAME, "momo-OwO-qwq", "养鱼刷B站：生物钟 + 真读字幕 + 日报/日记 + 克制的分享", VERSION)
 class BiliWhalePlugin(Star):
     """养鱼刷B站：按生物钟替你刷 B 站，读字幕、写日报和两本日记。"""
 

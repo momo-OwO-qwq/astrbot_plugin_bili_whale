@@ -54,8 +54,19 @@ class ConfigSchemaTest(unittest.TestCase):
 
     def test_required_metadata_exists(self):
         text = (ROOT / "metadata.yaml").read_text(encoding="utf-8")
-        for field in ("name: astrbot_plugin_bili_whale", "version:", "author:", "desc:"):
+        for field in (
+            "name: astrbot_plugin_bili_whale",
+            "version:",
+            "author: momo-OwO-qwq",
+            "desc:",
+            "support_platforms:",
+        ):
             self.assertIn(field, text)
+        import yaml
+
+        data = yaml.safe_load(text)
+        self.assertIn("webchat", data["support_platforms"])
+        self.assertIn("aiocqhttp", data["support_platforms"])
 
 
 if __name__ == "__main__":

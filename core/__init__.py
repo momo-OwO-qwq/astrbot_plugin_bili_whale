@@ -11,4 +11,4 @@ Alterssss/dsh-bili-whale（生物钟 / 人设 / 克制 / 两本日记），
 
 __all__ = ["__version__"]
 
-__version__ = "0.2.0"
+__version__ = "0.1.0"
