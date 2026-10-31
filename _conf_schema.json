@@ -1,8 +1,8 @@
 {
   "account": {
     "type": "object",
-    "description": "B 站账号（只在本机使用）",
-    "hint": "F12 → Application → Cookies → https://www.bilibili.com 手动复制。SESSDATA 是 HttpOnly，别用 document.cookie 取。",
+    "description": "B 站账号（优先扫码，手填仅作备用）",
+    "hint": "优先在聊天里发 /bili 登录 扫码；这里只在扫码不灵时手填。SESSDATA 是 HttpOnly，别用 document.cookie 取。",
     "items": {
       "sessdata": {
         "type": "string",
@@ -54,20 +54,32 @@
         "type": "int",
         "description": "每天最多醒几次",
         "default": 1,
-        "slider": { "min": 0, "max": 6, "step": 1 }
+        "slider": {
+          "min": 0,
+          "max": 6,
+          "step": 1
+        }
       },
       "skip_chance": {
         "type": "float",
         "description": "今天不想看的概率",
         "hint": "0.3 = 三成概率只写日记、不刷视频。",
         "default": 0.3,
-        "slider": { "min": 0, "max": 1, "step": 0.05 }
+        "slider": {
+          "min": 0,
+          "max": 1,
+          "step": 0.05
+        }
       },
       "min_gap_min": {
         "type": "int",
         "description": "两次唤醒之间至少隔几分钟",
         "default": 10,
-        "slider": { "min": 1, "max": 120, "step": 1 }
+        "slider": {
+          "min": 1,
+          "max": 120,
+          "step": 1
+        }
       }
     }
   },
@@ -78,7 +90,11 @@
       "keywords": {
         "type": "list",
         "description": "关注关键词（一行一个）",
-        "default": ["DeepSeek Harness", "DSH 插件", "dsh 教程"]
+        "default": [
+          "DeepSeek Harness",
+          "DSH 插件",
+          "dsh 教程"
+        ]
       },
       "exclude_keywords": {
         "type": "list",
@@ -89,14 +105,22 @@
         "type": "int",
         "description": "只看最近几天的视频",
         "default": 7,
-        "slider": { "min": 1, "max": 30, "step": 1 }
+        "slider": {
+          "min": 1,
+          "max": 30,
+          "step": 1
+        }
       },
       "deep_read": {
         "type": "int",
         "description": "每轮深读几条",
         "hint": "深读 = 字幕 + 热评 + 弹幕 + 模型总结；越多越贵。",
         "default": 3,
-        "slider": { "min": 1, "max": 8, "step": 1 }
+        "slider": {
+          "min": 1,
+          "max": 8,
+          "step": 1
+        }
       },
       "min_duration_sec": {
         "type": "int",
@@ -133,8 +157,14 @@
       "source": {
         "type": "string",
         "description": "人格来源",
-        "options": ["astrbot", "custom"],
-        "labels": ["AstrBot 人格（推荐）", "插件自定义"],
+        "options": [
+          "astrbot",
+          "custom"
+        ],
+        "labels": [
+          "AstrBot 人格（推荐）",
+          "插件自定义"
+        ],
         "hint": "AstrBot：使用 AstrBot 里给当前会话/默认设定的人格；自定义：用手填的人设正文。",
         "default": "astrbot"
       },
@@ -175,8 +205,16 @@
       "detail": {
         "type": "string",
         "description": "写多细",
-        "options": ["full", "thin", "none"],
-        "labels": ["完整", "薄版", "不写"],
+        "options": [
+          "full",
+          "thin",
+          "none"
+        ],
+        "labels": [
+          "完整",
+          "薄版",
+          "不写"
+        ],
         "default": "full"
       },
       "push_full": {
@@ -214,8 +252,16 @@
       "mode": {
         "type": "string",
         "description": "分享模式",
-        "options": ["off", "manual", "auto"],
-        "labels": ["关闭", "只预览，手动确认", "自动分享"],
+        "options": [
+          "off",
+          "manual",
+          "auto"
+        ],
+        "labels": [
+          "关闭",
+          "只预览，手动确认",
+          "自动分享"
+        ],
         "hint": "自动分享 = 生物钟刷完自己发；仍然受评分/理由/每天 ≤3/同视频 7 天限制。",
         "default": "off"
       },
@@ -223,13 +269,21 @@
         "type": "int",
         "description": "分享的最低评分（0-20）",
         "default": 13,
-        "slider": { "min": 0, "max": 20, "step": 1 }
+        "slider": {
+          "min": 0,
+          "max": 20,
+          "step": 1
+        }
       },
       "max_per_day": {
         "type": "int",
         "description": "每天最多分享几条",
         "default": 3,
-        "slider": { "min": 0, "max": 10, "step": 1 }
+        "slider": {
+          "min": 0,
+          "max": 10,
+          "step": 1
+        }
       },
       "same_video_days": {
         "type": "int",
@@ -252,7 +306,11 @@
         "description": "两次请求之间至少隔多少毫秒",
         "hint": "低于 300 会被强制按 300 算；默认 1500 是给新号的。",
         "default": 1500,
-        "slider": { "min": 300, "max": 5000, "step": 100 }
+        "slider": {
+          "min": 300,
+          "max": 5000,
+          "step": 100
+        }
       },
       "read_per_hour": {
         "type": "int",
@@ -335,7 +393,11 @@
             "description": "每天最多发几条私信",
             "hint": "私信风控最凶，默认 3；还会受全局写预算和 120 秒写冷却限制。",
             "default": 3,
-            "slider": {"min": 0, "max": 10, "step": 1}
+            "slider": {
+              "min": 0,
+              "max": 10,
+              "step": 1
+            }
           },
           "on_manual": {
             "type": "bool",
