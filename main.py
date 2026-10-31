@@ -82,7 +82,7 @@ except ImportError:  # 兼容"以单文件方式"加载 main.py 的宿主
     )
 
 PLUGIN_NAME = "astrbot_plugin_bili_whale"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 HELP_TEXT = """🐟 养鱼刷B站 —— 指令
 
