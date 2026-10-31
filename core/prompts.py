@@ -121,9 +121,13 @@ UP：{video.author}
 - 可以看（8-12）：有内容，但不看也不亏；
 - 不值当（0-7）：标题党、复读、广告、水分大。
 如果上面没有可用字幕（或字幕只有署名），你只能依据简介/评论/弹幕判断，此时**最高只能给“可以看”**。
+另外给一个 `interesting`（0-1）：这条视频对你来说有多有意思、多值得记住。
+- 0.9 以上：让你眼前一亮、很想回味的
+- 0.7 左右：确实好看，但不至于念念不忘
+- 0.4 以下：内容没毛病，但看完就忘
 
 只返回 JSON，不要代码块：
-{{"score":0,"verdict":"值得看|可以看|不值当","why":"两三句，具体说它讲了什么、为什么值得/不值得","one_liner":"一句你自己的话，40 字以内"}}"""
+{{"score":0,"verdict":"值得看|可以看|不值当","why":"两三句，具体说它讲了什么、为什么值得/不值得","one_liner":"一句你自己的话，40 字以内","interesting":0.5,"memory_hint":"如果值得记住，一句话写下为什么（不需要就留空）"}}"""
 
 
 def diary_prompt(
@@ -155,6 +159,13 @@ def diary_prompt(
 只返回 JSON，不要代码块：
 {{"letter":"...","diary":"...","closing":"..."}}"""
 
+
+CAPABILITY_PROMPT = (
+    "\n\n【本机 B 站能力】这个机器人装了 bili-whale 插件，可以搜视频、读视频简介/字幕/评论、"
+    "读日报和两本日记、查看养护计划/额度；发评论和 B 站私信默认要配置开关，不能凭空声称已发送。"
+    "被问「你能看 B 站吗 / 会刷视频吗」时明确回答能；需要真实数据就调用 bili_* 工具，"
+    "不要编造视频标题、UP 主、播放量。手动指令是 /bili 帮助。"
+)
 
 NO_AI_RULES = """【写法硬规矩】像人在评论区随口一说，不是推荐文案：
 - 只写一句话，不分点、不换行、不写小标题，不用「首先/其次/另外/总之/综上」；
@@ -231,6 +242,25 @@ def coerce_screen(data: dict[str, Any] | None, candidates: list[Video], want: in
     return out
 
 
+def parse_unit(value: Any) -> float:
+    """把模型给的 0-1 打分收敛到区间；解析不出来就是 0。"""
+    if isinstance(value, bool):
+        return 0.0
+    try:
+        number = float(str(value).strip())
+    except (TypeError, ValueError):
+        matched = re.search(r"\d*\.?\d+", str(value or ""))
+        if not matched:
+            return 0.0
+        try:
+            number = float(matched.group())
+        except (TypeError, ValueError):
+            return 0.0
+    if number > 10.0:  # 模型偶尔给 0-100，或 1.x 只是越界
+        number = number / 100.0
+    return max(0.0, min(1.0, number))
+
+
 def coerce_deep(data: dict[str, Any] | None, material: Material) -> DeepResult:
     video = material.video
     evidence = material.evidence
@@ -270,6 +300,8 @@ def coerce_deep(data: dict[str, Any] | None, material: Material) -> DeepResult:
         one_liner=one_liner,
         evidence=evidence,
         comment_samples=[clean_text(c.text, limit=200) for c in material.comments[:20]],
+        interesting=parse_unit(data.get("interesting")),
+        memory_hint=clean_text(data.get("memory_hint"), limit=160),
     )
 
 
