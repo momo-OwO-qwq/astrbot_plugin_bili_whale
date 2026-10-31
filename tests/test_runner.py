@@ -2,7 +2,7 @@ import tempfile
 import time
 import unittest
 
-from core.models import Comment, DanmakuHotspot, Subtitle, Video
+from core.models import Comment, CommentPostResult, DanmakuHotspot, Subtitle, Video
 from core.runner import Runner
 from core.store import Store
 
@@ -67,7 +67,7 @@ class FakeAPI:
 
     async def post_comment(self, aid, message):
         self.posted.append((aid, message))
-        return "12345"
+        return CommentPostResult(rpid="12345", verified=True, visible_to_self=True, reason="公开可见")
 
 
 class FakeChat:
@@ -156,8 +156,9 @@ class RunnerTest(unittest.IsolatedAsyncioTestCase):
             payload = await runner.prepare_share("BV1xx411c7mD")
             self.assertTrue(payload["comment"].startswith("@阿鲸"))
             self.assertEqual(api.posted, [])
-            rpid = await runner.confirm_share(payload)
-            self.assertEqual(rpid, "12345")
+            post = await runner.confirm_share(payload)
+            self.assertEqual(post.rpid, "12345")
+            self.assertTrue(post.verified)
             self.assertEqual(len(api.posted), 1)
 
     async def test_manual_deep_limit(self):

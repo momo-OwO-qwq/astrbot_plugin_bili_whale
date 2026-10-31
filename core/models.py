@@ -201,6 +201,28 @@ def _verdict_of(score: int) -> str:
 
 
 @dataclass
+class CommentPostResult:
+    """发评论的结果；code=0 不代表公开可见。"""
+
+    rpid: str = ""
+    verified: bool = False
+    visible_to_self: bool = False
+    reason: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.verified
+
+    @property
+    def status_text(self) -> str:
+        if self.verified:
+            return "已发且复查可见"
+        if self.visible_to_self:
+            return "接口已接受，但仅自己可见/审核中"
+        return "接口已接受，但复查不到"
+
+
+@dataclass
 class RunResult:
     scanned: int = 0
     deep: int = 0

@@ -21,7 +21,7 @@ from typing import Any, Awaitable, Callable, Mapping
 from . import quota as quota_mod
 from .bili_api import BiliAPI
 from .errors import BiliAuthError, BiliError, BiliRisk, BudgetError
-from .models import DeepResult, Material, RunResult, Video
+from .models import CommentPostResult, DeepResult, Material, RunResult, Video
 from .prompts import (
     DEFAULT_KEYWORDS,
     coerce_deep,
@@ -425,7 +425,7 @@ class Runner:
             "created_at": iso(),
         }
 
-    async def confirm_share(self, payload: dict[str, Any]) -> str:
+    async def confirm_share(self, payload: dict[str, Any]) -> CommentPostResult:
         if not quota_mod.share_config_enabled(self.cfg):
             raise BiliError("分享已在配置里关闭（share.mode = off）")
         limits = quota_mod.Limits.from_config(self.cfg)
@@ -443,10 +443,17 @@ class Runner:
         aid = int(payload.get("aid") or 0)
         if not aid:
             aid = (await self.api.video_info(bvid)).aid
-        rpid = await self.api.post_comment(aid, str(payload.get("comment") or ""))
+        comment = str(payload.get("comment") or "")
+        post = await self.api.post_comment(aid, comment)
         quota_mod.record_share(self.store.quota, bvid)
+        try:
+            self.store.add_comment(bvid, comment)
+        except OSError:
+            if self.logger:
+                self.logger.warning("评论已发出，但写评论台账失败")
         self.store.clear_pending_share()
-        return rpid
+        self.store.save()
+        return post
 
     async def share_best(self, results: list[DeepResult]) -> tuple[int, str]:
         if not results:
@@ -472,11 +479,21 @@ class Runner:
             if not comment:
                 return 0, "（这次没分享：评论没通过发布前检查）"
             aid = best.video.aid or (await self.api.video_info(best.video.bvid)).aid
-            rpid = await self.api.post_comment(aid, comment)
+            post = await self.api.post_comment(aid, comment)
             quota_mod.record_share(self.store.quota, best.video.bvid)
+            try:
+                self.store.add_comment(best.video.bvid, comment)
+            except OSError:
+                if self.logger:
+                    self.logger.warning("评论已发出，但写评论台账失败")
             self.store.save()
-            where = f"（rpid {rpid}）" if rpid else ""
-            return 1, f"已在这条视频评论区 @ 你{where}：{best.video.title}"
+            where = f"（rpid {post.rpid}）" if post.rpid else ""
+            if not post.verified:
+                return 0, (
+                    f"⚠️ 评论接口返回成功，但复查未通过：{post.reason}{where}。"
+                    "这次不当作已发，也不会自动重发；稍后可以去视频页确认。"
+                )
+            return 1, f"已发且复查可见{where}：{best.video.title}"
         except BiliRisk:
             raise
         except BudgetError:
