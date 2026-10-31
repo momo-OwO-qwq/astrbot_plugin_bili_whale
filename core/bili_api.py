@@ -266,24 +266,7 @@ class BiliAPI:
         }
 
     # ── 搜索 ─────────────────────────────────────────────────────────────
-    async def search(self, keyword: str, page: int = 1, page_size: int = 30) -> list[Video]:
-        keyword = clean_text(keyword, limit=60)
-        if not keyword:
-            return []
-        payload = await self._get_json(
-            "/x/web-interface/wbi/search/type",
-            {
-                "search_type": "video",
-                "keyword": keyword,
-                "page": max(1, int(page)),
-                "page_size": max(1, min(50, int(page_size))),
-                "order": "pubdate",
-            },
-            wbi=True,
-            referer=f"https://search.bilibili.com/all?keyword={quote(keyword)}",
-        )
-        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-        rows = data.get("result") or data.get("results") or []
+    def _videos_from_rows(self, rows: Any, limit: int = 60) -> list[Video]:
         videos: list[Video] = []
         if not isinstance(rows, list):
             return videos
@@ -300,6 +283,84 @@ class BiliAPI:
             if not video.duration:
                 video.duration = parse_duration(row.get("duration"))
             videos.append(video)
+            if len(videos) >= limit:
+                break
+        return videos
+
+    async def search(
+        self,
+        keyword: str,
+        page: int = 1,
+        page_size: int = 30,
+        order: str = "pubdate",
+    ) -> list[Video]:
+        keyword = clean_text(keyword, limit=60)
+        if not keyword:
+            return []
+        order = order if order in {"pubdate", "click", "dm", "totalrank"} else "pubdate"
+        payload = await self._get_json(
+            "/x/web-interface/wbi/search/type",
+            {
+                "search_type": "video",
+                "keyword": keyword,
+                "page": max(1, int(page)),
+                "page_size": max(1, min(50, int(page_size))),
+                "order": order,
+            },
+            wbi=True,
+            referer=f"https://search.bilibili.com/all?keyword={quote(keyword)}",
+        )
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        return self._videos_from_rows(data.get("result") or data.get("results") or [])
+
+    async def recommend(self, page_size: int = 30) -> list[Video]:
+        """当前账号的首页推荐流（按画像；不需要关键词）。"""
+        payload = await self._get_json(
+            "/x/web-interface/wbi/index/top/feed/rcmd",
+            {
+                "ps": max(1, min(40, int(page_size))),
+                "fresh_type": 4,
+                "feed_version": "V8",
+                "homepage_ver": 1,
+                "web_location": 1430650,
+                "y_num": 0,
+                "fresh_idx": 1,
+                "brush": 0,
+            },
+            wbi=True,
+            referer="https://www.bilibili.com/",
+        )
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        items = data.get("item") or data.get("data") or []
+        videos: list[Video] = []
+        if not isinstance(items, list):
+            return videos
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            goto = str(item.get("goto") or "")
+            bvid = str(item.get("bvid") or "").strip()
+            if goto and goto != "av":
+                continue
+            if not bvid.startswith("BV"):
+                continue
+            owner = item.get("owner") if isinstance(item.get("owner"), dict) else {}
+            stat = item.get("stat") if isinstance(item.get("stat"), dict) else {}
+            duration = item.get("duration")
+            videos.append(
+                Video(
+                    bvid=bvid,
+                    title=clean_text(strip_html(item.get("title")), limit=200),
+                    author=clean_text(strip_html(owner.get("name")), limit=60),
+                    mid=int(owner.get("mid") or 0),
+                    play=int(stat.get("view") or 0),
+                    pubdate=int(item.get("pubdate") or 0),
+                    duration=int(duration) if isinstance(duration, (int, float)) else parse_duration(duration),
+                    desc=clean_text(strip_html(item.get("desc")), limit=300),
+                )
+            )
+            if len(videos) >= max(1, min(40, int(page_size))):
+                break
         return videos
 
     # ── 视频信息 ─────────────────────────────────────────────────────────
