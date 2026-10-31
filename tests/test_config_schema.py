@@ -33,6 +33,25 @@ class ConfigSchemaTest(unittest.TestCase):
             self.assertFalse(items[key].get("invisible", False), key)
             self.assertTrue(items[key].get("description"), key)
 
+    def test_memory_and_write_tools(self):
+        schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
+        self.assertIn("memory", schema)
+        memory = schema["memory"]["items"]
+        for key in (
+            "enabled",
+            "auto_write",
+            "min_score",
+            "strong_score",
+            "chance",
+            "interesting_threshold",
+            "max_per_day",
+            "importance",
+            "max_chars",
+        ):
+            self.assertIn(key, memory)
+            self.assertTrue(memory[key].get("description"), key)
+        self.assertFalse(schema["llm"]["items"]["allow_write_tools"]["default"])
+
     def test_required_metadata_exists(self):
         text = (ROOT / "metadata.yaml").read_text(encoding="utf-8")
         for field in ("name: astrbot_plugin_bili_whale", "version:", "author:", "desc:"):
