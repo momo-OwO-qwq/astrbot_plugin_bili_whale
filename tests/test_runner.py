@@ -14,6 +14,9 @@ def base_config(**overrides):
             "keywords": ["测试关键词"],
             "exclude_keywords": [],
             "search_days": 7,
+            "search_pages": 2,
+            "search_order": "pubdate",
+            "source": "keywords",
             "deep_read": 2,
             "min_duration_sec": 0,
             "max_duration_sec": 7200,
@@ -42,7 +45,10 @@ class FakeAPI:
     async def login_info(self):
         return {"is_login": True, "uname": "小号", "mid": 1}
 
-    async def search(self, keyword, page=1, page_size=30):
+    async def search(self, keyword, page=1, page_size=30, order="pubdate"):
+        return list(self.videos.values()) if page == 1 else []
+
+    async def recommend(self, page_size=30):
         return list(self.videos.values())
 
     async def video_info(self, bvid, force=False):
@@ -153,6 +159,25 @@ class RunnerTest(unittest.IsolatedAsyncioTestCase):
             rpid = await runner.confirm_share(payload)
             self.assertEqual(rpid, "12345")
             self.assertEqual(len(api.posted), 1)
+
+    async def test_manual_deep_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(tmp)
+            videos = [make_video(f"BV1xx411c7m{i}", f"视频{i}", i) for i in range(3)]
+            runner = Runner(base_config(), FakeAPI(videos), store, chat=FakeChat())
+            result = await runner.run(allow_share=False, deep_limit=1)
+            self.assertEqual(result.deep, 1)
+            self.assertEqual(store.seen_count(), 1)
+
+    async def test_recommend_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(tmp)
+            videos = [make_video("BV1xx411c7mD", "推荐视频", 1)]
+            cfg = base_config(content={"source": "recommend"})
+            runner = Runner(cfg, FakeAPI(videos), store, chat=FakeChat())
+            result = await runner.run(allow_share=False)
+            self.assertEqual(result.scanned, 1)
+            self.assertEqual(result.deep, 1)
 
     async def test_skip_writes_diary(self):
         with tempfile.TemporaryDirectory() as tmp:

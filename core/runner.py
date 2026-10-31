@@ -74,7 +74,7 @@ class Runner:
         return system_prompt(self.cfg, self.persona_text or None)
 
     # ── 对外：完整一轮 ───────────────────────────────────────────────────
-    async def run(self, allow_share: bool = True) -> RunResult:
+    async def run(self, allow_share: bool = True, deep_limit: int | None = None) -> RunResult:
         result = RunResult()
         day = today_str()
         try:
@@ -87,10 +87,11 @@ class Runner:
                 result.summary = "🐟 今天没有搜到新的视频（关键词都翻过一遍了）。"
                 return result
 
-            picks = await self._screen(candidates)
+            picks = await self._screen(candidates, deep_limit)
             deep_results: list[DeepResult] = []
             unreadable = 0
-            for video in picks[: self._deep_limit()]:
+            limit = max(1, min(8, int(deep_limit or self._deep_limit())))
+            for video in picks[:limit]:
                 item = await self.deep_read(video)
                 if item is None:
                     unreadable += 1
@@ -180,48 +181,86 @@ class Runner:
 
     # ── 搜索与筛选 ───────────────────────────────────────────────────────
     async def collect_candidates(self) -> list[Video]:
-        keywords = as_str_list(cfg_get(self.cfg, "content.keywords", []), DEFAULT_KEYWORDS)[:6]
+        raw_keywords = as_str_list(cfg_get(self.cfg, "content.keywords", []), [])[:6]
+        source = str(cfg_get(self.cfg, "content.source", "auto") or "auto").strip().lower()
+        if source not in {"auto", "keywords", "recommend"}:
+            source = "auto"
+        if source == "auto":
+            source = "recommend" if not raw_keywords else "keywords"
         days = as_int(cfg_get(self.cfg, "content.search_days", 7), 7, 1, 90)
+        pages = as_int(cfg_get(self.cfg, "content.search_pages", 2), 2, 1, 5)
+        order = str(cfg_get(self.cfg, "content.search_order", "pubdate") or "pubdate")
         min_duration = as_int(cfg_get(self.cfg, "content.min_duration_sec", 60), 60, 0, 86_400)
         max_duration = as_int(cfg_get(self.cfg, "content.max_duration_sec", 7200), 7200, 60, 86_400)
         excludes = [x.lower() for x in as_str_list(cfg_get(self.cfg, "content.exclude_keywords", []))]
-        now_ts = time.time()
-        cutoff = now_ts - days * 86_400
+        cutoff = time.time() - days * 86_400
         by_bvid: dict[str, Video] = {}
         last_error: Exception | None = None
-        for keyword in keywords:
+
+        def accept(video: Video, apply_age: bool = True) -> bool:
+            if not video.bvid or video.bvid in by_bvid:
+                return False
+            if self.store.is_seen(video.bvid, days=30):
+                return False
+            if apply_age and video.pubdate and video.pubdate < cutoff:
+                return False
+            if video.duration and video.duration < min_duration:
+                return False
+            if video.duration and video.duration > max_duration:
+                return False
+            title = video.title.lower()
+            if any(word and word in title for word in excludes):
+                return False
+            by_bvid[video.bvid] = video
+            return True
+
+        if source == "recommend":
             try:
-                rows = await self.api.search(keyword)
+                rows = await self.api.recommend(40)
+                for video in rows:
+                    # 推荐流本来就可能推旧视频，不按发布时间砍
+                    accept(video, apply_age=False)
             except (BiliRisk, BudgetError):
                 raise
             except BiliError as exc:
                 last_error = exc
                 if self.logger:
-                    self.logger.warning("bili search failed for %s: %s", keyword, exc)
-                continue
-            for video in rows:
-                if not video.bvid or video.bvid in by_bvid:
-                    continue
-                if self.store.is_seen(video.bvid, days=30):
-                    continue
-                if video.pubdate and video.pubdate < cutoff:
-                    continue
-                if video.duration and video.duration < min_duration:
-                    continue
-                if video.duration and video.duration > max_duration:
-                    continue
-                title = video.title.lower()
-                if any(word and word in title for word in excludes):
-                    continue
-                by_bvid[video.bvid] = video
+                    self.logger.warning("bili recommend failed: %s", exc)
+            # 推荐流失败且没有关键词时，退回内置关键词，至少别白跑
+            if not by_bvid and not raw_keywords:
+                source = "keywords"
+
+        if source == "keywords":
+            keywords = raw_keywords or DEFAULT_KEYWORDS
+            for keyword in keywords:
+                for page in range(1, pages + 1):
+                    try:
+                        rows = await self.api.search(keyword, page=page, order=order)
+                    except (BiliRisk, BudgetError):
+                        raise
+                    except BiliError as exc:
+                        last_error = exc
+                        if self.logger:
+                            self.logger.warning("bili search failed for %s p%s: %s", keyword, page, exc)
+                        break
+                    if not rows:
+                        break
+                    for video in rows:
+                        accept(video)
+                    if len(by_bvid) >= 80:
+                        break
+                if len(by_bvid) >= 80:
+                    break
+
         if not by_bvid and last_error:
-            raise BiliError(f"搜索接口都没成功：{last_error}")
+            raise BiliError(f"候选接口都没成功：{last_error}")
         rows = list(by_bvid.values())
-        rows.sort(key=lambda v: (v.pubdate, v.play), reverse=True)
+        if source == "keywords":
+            rows.sort(key=lambda v: (v.pubdate, v.play), reverse=True)
         return rows[:40]
 
-    async def _screen(self, candidates: list[Video]) -> list[Video]:
-        want = self._deep_limit()
+    async def _screen(self, candidates: list[Video], want: int | None = None) -> list[Video]:
+        want = max(1, min(8, int(want or self._deep_limit())))
         if len(candidates) <= want:
             return candidates[:want]
         picks: list[str] = []
