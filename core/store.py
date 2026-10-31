@@ -26,6 +26,7 @@ def _default_state() -> dict[str, Any]:
         "quota": {},
         "seen": {},
         "pending_share": {},
+        "memory_log": {},
         "last_umo": "",
         "last_run": "",
         "runs": 0,

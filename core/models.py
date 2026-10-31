@@ -175,6 +175,9 @@ class DeepResult:
     evidence: list[str] = field(default_factory=list)
     # 发评论前做「撞热评」检查用；由 coerce_deep 从 material.comments 带过来。
     comment_samples: list[str] = field(default_factory=list)
+    # 模型对「这条有多有意思」的打分（0-1），长期记忆用来做选择性写入。
+    interesting: float = 0.0
+    memory_hint: str = ""
 
     VERDICTS = ("值得看", "可以看", "不值当")
 
@@ -189,6 +192,8 @@ class DeepResult:
             one_liner=self.one_liner.strip(),
             evidence=list(self.evidence),
             comment_samples=list(self.comment_samples),
+            interesting=max(0.0, min(1.0, float(self.interesting or 0.0))),
+            memory_hint=self.memory_hint.strip(),
         )
 
 
@@ -232,3 +237,6 @@ class RunResult:
     summary: str = ""
     error: str = ""
     skip: bool = False
+    # 这一轮是否值得写进长期记忆；由 runner 按分数/概率/有趣程度决定。
+    memory_note: str = ""
+    memory_bvid: str = ""

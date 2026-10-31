@@ -18,6 +18,7 @@ import math
 import time
 from typing import Any, Awaitable, Callable, Mapping
 
+from . import memory_policy as memory_mod
 from . import quota as quota_mod
 from .bili_api import BiliAPI
 from .errors import BiliAuthError, BiliError, BiliRisk, BudgetError
@@ -38,6 +39,7 @@ from .prompts import (
     system_prompt,
 )
 from .report import VERDICT_ORDER, append_report, build_digest_text, build_report, build_skip_note, build_summary
+from .settings import output_setting
 from .store import Store
 from .style import style_reason
 from .util import (
@@ -108,7 +110,7 @@ class Runner:
 
             closing = await self._write_diaries(day, visible)
             if visible:
-                detail = str(cfg_get(self.cfg, "report.detail", "full") or "full")
+                detail = str(output_setting(self.cfg, "report_detail") or "full")
                 report = build_report(
                     day,
                     visible,
@@ -136,7 +138,13 @@ class Runner:
             if unreadable:
                 result.summary += f"\n另有 {unreadable} 条读不到内容，跳过了。"
             if visible and not result.shared and quota_mod.share_manual_enabled(self.cfg):
-                result.summary += "\n（分享模式 manual：想发的话用 /bili 分享 BV… 预览）"
+                result.summary += "\n（评论分享是预览确认模式：想发用 /bili 分享 BV…，再 /bili 确认）"
+            # 只挑一条最值得记的进长期记忆；真正落盘由 main 层按每日上限执行。
+            try:
+                memory_mod.attach(result, visible, memory_mod.MemoryPolicy.from_config(self.cfg))
+            except Exception as exc:
+                if self.logger:
+                    self.logger.warning("bili-whale memory pick failed: %s", exc)
             self.store.touch_run()
             return result
         except BiliAuthError as exc:
@@ -341,7 +349,7 @@ class Runner:
 
     # ── 日记 / 报告 ──────────────────────────────────────────────────────
     async def _write_diaries(self, day: str, results: list[DeepResult], skip: bool = False) -> str:
-        if not as_bool(cfg_get(self.cfg, "diary.enabled", True), True):
+        if not as_bool(output_setting(self.cfg, "diary_enabled"), True):
             return ""
         fallback = "今天刷了一圈，没什么特别想说的。" if not skip else "今天不想看，就这样。"
         data = None
@@ -394,7 +402,7 @@ class Runner:
 
     async def prepare_share(self, bvid: str) -> dict[str, Any]:
         if not quota_mod.share_config_enabled(self.cfg):
-            raise BiliError("分享已在配置里关闭（share.mode = off）")
+            raise BiliError("评论分享已关闭（share.enabled = false）")
         video = await self.api.video_info(bvid)
         result = await self.deep_read(video, use_llm=True)
         if result is None:
@@ -427,7 +435,7 @@ class Runner:
 
     async def confirm_share(self, payload: dict[str, Any]) -> CommentPostResult:
         if not quota_mod.share_config_enabled(self.cfg):
-            raise BiliError("分享已在配置里关闭（share.mode = off）")
+            raise BiliError("评论分享已关闭（share.enabled = false）")
         limits = quota_mod.Limits.from_config(self.cfg)
         bvid = str(payload.get("bvid") or "")
         score = int(payload.get("score") or 0)
