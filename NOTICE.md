@@ -7,10 +7,16 @@
 | [c1overzz/dsh-bili-scroll](https://github.com/c1overzz/dsh-bili-scroll) | MIT，Copyright (c) 2026 c1overzz | 每日搜关键词 → 读字幕原文 → 写 Markdown 日报 → 挑值得的在评论区 @ 使用者；`### BV号` 的日报格式；WBI 字幕/评论/搜索的接口经验；提示词里的红线 |
 | [Alterssss/dsh-bili-whale](https://github.com/Alterssss/dsh-bili-whale) | MIT，Copyright (c) 2026 ALTERSSSS | 生物钟（窗口内随机醒、可能"今天不想看"、最少间隔、一天 N 次）；人设注入；两本日记；阅读/写入/分享配额；412 熔断与请求节流；"代码强制，不靠自觉"的克制 |
 
-两份原始 MIT 许可证全文放在 [`LICENSES/`](LICENSES/) 下：
+另外两处实现参考：
+
+- **扫码登录 / 二维码生成**：`core/qr.py` 移植自 [DrKthrose/astrbot_plugin_bili_whale](https://github.com/DrKthrose/astrbot_plugin_bili_whale)（MIT），算法未改；登录 HTTP 流程按 passport 网页接口重写。
+- **评论语感闸门**：思路来自 dsh-bili-scroll 2.2.0 的 `comments.md` + bigram 相似度检查，本仓库用 Python 重新实现。
+
+MIT 许可证全文放在 [`LICENSES/`](LICENSES/) 下：
 
 - `LICENSES/dsh-bili-scroll-LICENSE`
 - `LICENSES/dsh-bili-whale-LICENSE`
+- `LICENSES/drkthrose-astrbot_plugin_bili_whale-LICENSE`
 
 本仓库自身同样以 MIT 发布，正文见 [`LICENSE`](LICENSE)。
 

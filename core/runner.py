@@ -18,10 +18,11 @@ import math
 import time
 from typing import Any, Awaitable, Callable, Mapping
 
+from . import memory_policy as memory_mod
 from . import quota as quota_mod
 from .bili_api import BiliAPI
 from .errors import BiliAuthError, BiliError, BiliRisk, BudgetError
-from .models import DeepResult, Material, RunResult, Video
+from .models import CommentPostResult, DeepResult, Material, RunResult, Video
 from .prompts import (
     DEFAULT_KEYWORDS,
     coerce_deep,
@@ -38,7 +39,9 @@ from .prompts import (
     system_prompt,
 )
 from .report import VERDICT_ORDER, append_report, build_digest_text, build_report, build_skip_note, build_summary
+from .settings import output_setting
 from .store import Store
+from .style import style_reason
 from .util import (
     as_bool,
     as_int,
@@ -74,7 +77,7 @@ class Runner:
         return system_prompt(self.cfg, self.persona_text or None)
 
     # ── 对外：完整一轮 ───────────────────────────────────────────────────
-    async def run(self, allow_share: bool = True) -> RunResult:
+    async def run(self, allow_share: bool = True, deep_limit: int | None = None) -> RunResult:
         result = RunResult()
         day = today_str()
         try:
@@ -87,10 +90,11 @@ class Runner:
                 result.summary = "🐟 今天没有搜到新的视频（关键词都翻过一遍了）。"
                 return result
 
-            picks = await self._screen(candidates)
+            picks = await self._screen(candidates, deep_limit)
             deep_results: list[DeepResult] = []
             unreadable = 0
-            for video in picks[: self._deep_limit()]:
+            limit = max(1, min(8, int(deep_limit or self._deep_limit())))
+            for video in picks[:limit]:
                 item = await self.deep_read(video)
                 if item is None:
                     unreadable += 1
@@ -106,7 +110,7 @@ class Runner:
 
             closing = await self._write_diaries(day, visible)
             if visible:
-                detail = str(cfg_get(self.cfg, "report.detail", "full") or "full")
+                detail = str(output_setting(self.cfg, "report_detail") or "full")
                 report = build_report(
                     day,
                     visible,
@@ -134,7 +138,13 @@ class Runner:
             if unreadable:
                 result.summary += f"\n另有 {unreadable} 条读不到内容，跳过了。"
             if visible and not result.shared and quota_mod.share_manual_enabled(self.cfg):
-                result.summary += "\n（分享模式 manual：想发的话用 /bili 分享 BV… 预览）"
+                result.summary += "\n（评论分享是预览确认模式：想发用 /bili 分享 BV…，再 /bili 确认）"
+            # 只挑一条最值得记的进长期记忆；真正落盘由 main 层按每日上限执行。
+            try:
+                memory_mod.attach(result, visible, memory_mod.MemoryPolicy.from_config(self.cfg))
+            except Exception as exc:
+                if self.logger:
+                    self.logger.warning("bili-whale memory pick failed: %s", exc)
             self.store.touch_run()
             return result
         except BiliAuthError as exc:
@@ -180,48 +190,86 @@ class Runner:
 
     # ── 搜索与筛选 ───────────────────────────────────────────────────────
     async def collect_candidates(self) -> list[Video]:
-        keywords = as_str_list(cfg_get(self.cfg, "content.keywords", []), DEFAULT_KEYWORDS)[:6]
+        raw_keywords = as_str_list(cfg_get(self.cfg, "content.keywords", []), [])[:6]
+        source = str(cfg_get(self.cfg, "content.source", "auto") or "auto").strip().lower()
+        if source not in {"auto", "keywords", "recommend"}:
+            source = "auto"
+        if source == "auto":
+            source = "recommend" if not raw_keywords else "keywords"
         days = as_int(cfg_get(self.cfg, "content.search_days", 7), 7, 1, 90)
+        pages = as_int(cfg_get(self.cfg, "content.search_pages", 2), 2, 1, 5)
+        order = str(cfg_get(self.cfg, "content.search_order", "pubdate") or "pubdate")
         min_duration = as_int(cfg_get(self.cfg, "content.min_duration_sec", 60), 60, 0, 86_400)
         max_duration = as_int(cfg_get(self.cfg, "content.max_duration_sec", 7200), 7200, 60, 86_400)
         excludes = [x.lower() for x in as_str_list(cfg_get(self.cfg, "content.exclude_keywords", []))]
-        now_ts = time.time()
-        cutoff = now_ts - days * 86_400
+        cutoff = time.time() - days * 86_400
         by_bvid: dict[str, Video] = {}
         last_error: Exception | None = None
-        for keyword in keywords:
+
+        def accept(video: Video, apply_age: bool = True) -> bool:
+            if not video.bvid or video.bvid in by_bvid:
+                return False
+            if self.store.is_seen(video.bvid, days=30):
+                return False
+            if apply_age and video.pubdate and video.pubdate < cutoff:
+                return False
+            if video.duration and video.duration < min_duration:
+                return False
+            if video.duration and video.duration > max_duration:
+                return False
+            title = video.title.lower()
+            if any(word and word in title for word in excludes):
+                return False
+            by_bvid[video.bvid] = video
+            return True
+
+        if source == "recommend":
             try:
-                rows = await self.api.search(keyword)
+                rows = await self.api.recommend(40)
+                for video in rows:
+                    # 推荐流本来就可能推旧视频，不按发布时间砍
+                    accept(video, apply_age=False)
             except (BiliRisk, BudgetError):
                 raise
             except BiliError as exc:
                 last_error = exc
                 if self.logger:
-                    self.logger.warning("bili search failed for %s: %s", keyword, exc)
-                continue
-            for video in rows:
-                if not video.bvid or video.bvid in by_bvid:
-                    continue
-                if self.store.is_seen(video.bvid, days=30):
-                    continue
-                if video.pubdate and video.pubdate < cutoff:
-                    continue
-                if video.duration and video.duration < min_duration:
-                    continue
-                if video.duration and video.duration > max_duration:
-                    continue
-                title = video.title.lower()
-                if any(word and word in title for word in excludes):
-                    continue
-                by_bvid[video.bvid] = video
+                    self.logger.warning("bili recommend failed: %s", exc)
+            # 推荐流失败且没有关键词时，退回内置关键词，至少别白跑
+            if not by_bvid and not raw_keywords:
+                source = "keywords"
+
+        if source == "keywords":
+            keywords = raw_keywords or DEFAULT_KEYWORDS
+            for keyword in keywords:
+                for page in range(1, pages + 1):
+                    try:
+                        rows = await self.api.search(keyword, page=page, order=order)
+                    except (BiliRisk, BudgetError):
+                        raise
+                    except BiliError as exc:
+                        last_error = exc
+                        if self.logger:
+                            self.logger.warning("bili search failed for %s p%s: %s", keyword, page, exc)
+                        break
+                    if not rows:
+                        break
+                    for video in rows:
+                        accept(video)
+                    if len(by_bvid) >= 80:
+                        break
+                if len(by_bvid) >= 80:
+                    break
+
         if not by_bvid and last_error:
-            raise BiliError(f"搜索接口都没成功：{last_error}")
+            raise BiliError(f"候选接口都没成功：{last_error}")
         rows = list(by_bvid.values())
-        rows.sort(key=lambda v: (v.pubdate, v.play), reverse=True)
+        if source == "keywords":
+            rows.sort(key=lambda v: (v.pubdate, v.play), reverse=True)
         return rows[:40]
 
-    async def _screen(self, candidates: list[Video]) -> list[Video]:
-        want = self._deep_limit()
+    async def _screen(self, candidates: list[Video], want: int | None = None) -> list[Video]:
+        want = max(1, min(8, int(want or self._deep_limit())))
         if len(candidates) <= want:
             return candidates[:want]
         picks: list[str] = []
@@ -301,7 +349,7 @@ class Runner:
 
     # ── 日记 / 报告 ──────────────────────────────────────────────────────
     async def _write_diaries(self, day: str, results: list[DeepResult], skip: bool = False) -> str:
-        if not as_bool(cfg_get(self.cfg, "diary.enabled", True), True):
+        if not as_bool(output_setting(self.cfg, "diary_enabled"), True):
             return ""
         fallback = "今天刷了一圈，没什么特别想说的。" if not skip else "今天不想看，就这样。"
         data = None
@@ -319,9 +367,42 @@ class Runner:
         return diary["closing"]
 
     # ── 分享（评论区 @ 你）───────────────────────────────────────────────
+    async def _make_comment(self, result: DeepResult) -> str:
+        """生成分享评论；过发布前检查，最多重写一次，仍不过就返回空串。"""
+        owner = str(cfg_get(self.cfg, "account.owner_name", "") or "").strip()
+        if not owner:
+            return ""
+        limit = as_int(cfg_get(self.cfg, "share.max_chars", 40), 40, 15, 500)
+        gate_on = as_bool(cfg_get(self.cfg, "share.style_gate", True), True)
+        history = self.store.recent_comments(30)
+        prompt = comment_prompt(result, self.cfg, limit)
+        rejected = ""
+        reason = ""
+        for attempt in range(2):
+            candidate = ""
+            if self.chat:
+                text = await self._ask(self._system(), prompt)
+                candidate = sanitize_comment(text or "", owner, limit)
+            if not candidate:
+                candidate = fallback_comment(result, owner, limit)
+            if not candidate:
+                break
+            reason = style_reason(candidate, history, result.comment_samples) if gate_on else ""
+            if not reason:
+                return candidate
+            rejected = candidate
+            prompt = (
+                comment_prompt(result, self.cfg, limit)
+                + f"\n\n上一版没通过语感检查（{reason}）：「{rejected}」\n"
+                "重写一句；换开头、换关注点，只写一句口语，别像文案。"
+            )
+        if reason and self.logger:
+            self.logger.info("[bili-whale] 分享评论被发布前检查拦下：%s", reason)
+        return ""
+
     async def prepare_share(self, bvid: str) -> dict[str, Any]:
         if not quota_mod.share_config_enabled(self.cfg):
-            raise BiliError("分享已在配置里关闭（share.mode = off）")
+            raise BiliError("评论分享已关闭（share.enabled = false）")
         video = await self.api.video_info(bvid)
         result = await self.deep_read(video, use_llm=True)
         if result is None:
@@ -338,12 +419,9 @@ class Runner:
         owner = str(cfg_get(self.cfg, "account.owner_name", "") or "").strip()
         if not owner:
             raise BiliError("还没填「你的 B 站昵称」，没法 @ 你；去插件配置里补上")
-        comment = ""
-        if self.chat:
-            text = await self._ask(self._system(), comment_prompt(result, self.cfg))
-            comment = sanitize_comment(text or "", owner)
+        comment = await self._make_comment(result)
         if not comment:
-            comment = fallback_comment(result, owner)
+            raise BiliError("评论没通过发布前检查（或模型没生成出来），这次先不发")
         return {
             "bvid": video.bvid,
             "aid": video.aid,
@@ -355,9 +433,9 @@ class Runner:
             "created_at": iso(),
         }
 
-    async def confirm_share(self, payload: dict[str, Any]) -> str:
+    async def confirm_share(self, payload: dict[str, Any]) -> CommentPostResult:
         if not quota_mod.share_config_enabled(self.cfg):
-            raise BiliError("分享已在配置里关闭（share.mode = off）")
+            raise BiliError("评论分享已关闭（share.enabled = false）")
         limits = quota_mod.Limits.from_config(self.cfg)
         bvid = str(payload.get("bvid") or "")
         score = int(payload.get("score") or 0)
@@ -373,10 +451,17 @@ class Runner:
         aid = int(payload.get("aid") or 0)
         if not aid:
             aid = (await self.api.video_info(bvid)).aid
-        rpid = await self.api.post_comment(aid, str(payload.get("comment") or ""))
+        comment = str(payload.get("comment") or "")
+        post = await self.api.post_comment(aid, comment)
         quota_mod.record_share(self.store.quota, bvid)
+        try:
+            self.store.add_comment(bvid, comment)
+        except OSError:
+            if self.logger:
+                self.logger.warning("评论已发出，但写评论台账失败")
         self.store.clear_pending_share()
-        return rpid
+        self.store.save()
+        return post
 
     async def share_best(self, results: list[DeepResult]) -> tuple[int, str]:
         if not results:
@@ -398,18 +483,25 @@ class Runner:
             write_decision = quota_mod.can_write(self.store.quota, limits)
             if not write_decision:
                 return 0, f"（这次没分享：{write_decision.reason}）"
-            comment = ""
-            if self.chat:
-                text = await self._ask(self._system(), comment_prompt(best, self.cfg))
-                comment = sanitize_comment(text or "", owner)
+            comment = await self._make_comment(best)
             if not comment:
-                comment = fallback_comment(best, owner)
+                return 0, "（这次没分享：评论没通过发布前检查）"
             aid = best.video.aid or (await self.api.video_info(best.video.bvid)).aid
-            rpid = await self.api.post_comment(aid, comment)
+            post = await self.api.post_comment(aid, comment)
             quota_mod.record_share(self.store.quota, best.video.bvid)
+            try:
+                self.store.add_comment(best.video.bvid, comment)
+            except OSError:
+                if self.logger:
+                    self.logger.warning("评论已发出，但写评论台账失败")
             self.store.save()
-            where = f"（rpid {rpid}）" if rpid else ""
-            return 1, f"已在这条视频评论区 @ 你{where}：{best.video.title}"
+            where = f"（rpid {post.rpid}）" if post.rpid else ""
+            if not post.verified:
+                return 0, (
+                    f"⚠️ 评论接口返回成功，但复查未通过：{post.reason}{where}。"
+                    "这次不当作已发，也不会自动重发；稍后可以去视频页确认。"
+                )
+            return 1, f"已发且复查可见{where}：{best.video.title}"
         except BiliRisk:
             raise
         except BudgetError:

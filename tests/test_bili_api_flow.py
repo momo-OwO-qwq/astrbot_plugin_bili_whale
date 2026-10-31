@@ -1,5 +1,6 @@
 import json
 import unittest
+from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlsplit
 
 from core.bili_api import BiliAPI
@@ -88,6 +89,23 @@ class FakeSession:
             },
         }
         self.relation = {"code": 0, "data": {"attribute": 6}}
+        self.verify_empty = False
+        self.recommend = {
+            "code": 0,
+            "data": {
+                "item": [
+                    {
+                        "goto": "av",
+                        "bvid": "BV1xx411c7mD",
+                        "title": "推荐视频",
+                        "owner": {"name": "UP", "mid": 7},
+                        "stat": {"view": 12345},
+                        "duration": 600,
+                        "pubdate": 1700000000,
+                    }
+                ]
+            },
+        }
         self.replies = {
             "code": 0,
             "data": {
@@ -113,6 +131,8 @@ class FakeSession:
             return FakeResponse(self.view)
         if path == "/x/web-interface/wbi/search/type":
             return FakeResponse(self.search)
+        if path == "/x/web-interface/wbi/index/top/feed/rcmd":
+            return FakeResponse(self.recommend)
         if path == "/x/player/wbi/v2":
             return FakeResponse(
                 {"code": 0, "data": {"subtitle": {"subtitles": [
@@ -120,6 +140,13 @@ class FakeSession:
                 ]}}}
             )
         if path == "/x/v2/reply":
+            # 复核评论可见性时用 sort=0；返回刚发的那条，避免测试卡在重试里。
+            if params and str(params.get("sort")) == "0":
+                if self.verify_empty:
+                    return FakeResponse({"code": 0, "data": {"replies": []}})
+                return FakeResponse(
+                    {"code": 0, "data": {"replies": [{"rpid": 123, "member": {"uname": "我"}, "content": {"message": "发出去的评论"}}]}}
+                )
             return FakeResponse(self.replies)
         if path == "/x/relation":
             return FakeResponse(self.relation)
@@ -168,14 +195,21 @@ class BiliApiFlowTest(unittest.IsolatedAsyncioTestCase):
         comments = await self.api.hot_comments(video)
         self.assertEqual(comments[0].user, "观众")
 
-        rpid = await self.api.post_comment(video.aid, "@阿鲸 这条不错")
-        self.assertEqual(rpid, "123")
+        posted = await self.api.post_comment(video.aid, "@阿鲸 这条不错")
+        self.assertEqual(posted.rpid, "123")
+        self.assertTrue(posted.verified)
         self.assertEqual(self.guard.writes, 1)
         post = [r for r in self.session.requests if r[0] == "POST"][0]
         self.assertIn("w_rid=", post[1])
         body = post[2].decode() if isinstance(post[2], bytes) else str(post[2])
         self.assertIn("csrf=j", body)
         self.assertIn("%40%E9%98%BF%E9%B2%B8", body)
+
+    async def test_recommend_feed(self):
+        videos = await self.api.recommend(10)
+        self.assertEqual(videos[0].bvid, "BV1xx411c7mD")
+        self.assertEqual(videos[0].title, "推荐视频")
+        self.assertEqual(videos[0].duration, 600)
 
     async def test_search_request_is_wbi_signed(self):
         await self.api.search("测试")
@@ -184,6 +218,14 @@ class BiliApiFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("w_rid", query)
         self.assertIn("wts", query)
         self.assertEqual(query["keyword"], ["测试"])
+
+    async def test_post_code_zero_but_not_visible_is_not_reported_as_sent(self):
+        self.session.verify_empty = True
+        with patch("core.bili_api.asyncio.sleep", new=AsyncMock()):
+            posted = await self.api.post_comment(99, "@阿鲸 这条不错")
+        self.assertEqual(posted.rpid, "123")
+        self.assertFalse(posted.verified)
+        self.assertIn("没查到", posted.reason)
 
     async def test_send_dm_requires_mutual_follow(self):
         self.api.dev_id = "WEB-TEST-DEVICE"

@@ -173,6 +173,11 @@ class DeepResult:
     why: str = ""
     one_liner: str = ""
     evidence: list[str] = field(default_factory=list)
+    # 发评论前做「撞热评」检查用；由 coerce_deep 从 material.comments 带过来。
+    comment_samples: list[str] = field(default_factory=list)
+    # 模型对「这条有多有意思」的打分（0-1），长期记忆用来做选择性写入。
+    interesting: float = 0.0
+    memory_hint: str = ""
 
     VERDICTS = ("值得看", "可以看", "不值当")
 
@@ -186,6 +191,9 @@ class DeepResult:
             why=self.why.strip(),
             one_liner=self.one_liner.strip(),
             evidence=list(self.evidence),
+            comment_samples=list(self.comment_samples),
+            interesting=max(0.0, min(1.0, float(self.interesting or 0.0))),
+            memory_hint=self.memory_hint.strip(),
         )
 
 
@@ -198,6 +206,28 @@ def _verdict_of(score: int) -> str:
 
 
 @dataclass
+class CommentPostResult:
+    """发评论的结果；code=0 不代表公开可见。"""
+
+    rpid: str = ""
+    verified: bool = False
+    visible_to_self: bool = False
+    reason: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.verified
+
+    @property
+    def status_text(self) -> str:
+        if self.verified:
+            return "已发且复查可见"
+        if self.visible_to_self:
+            return "接口已接受，但仅自己可见/审核中"
+        return "接口已接受，但复查不到"
+
+
+@dataclass
 class RunResult:
     scanned: int = 0
     deep: int = 0
@@ -207,3 +237,6 @@ class RunResult:
     summary: str = ""
     error: str = ""
     skip: bool = False
+    # 这一轮是否值得写进长期记忆；由 runner 按分数/概率/有趣程度决定。
+    memory_note: str = ""
+    memory_bvid: str = ""

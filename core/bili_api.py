@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -24,7 +25,7 @@ from typing import Any, Mapping
 from urllib.parse import quote
 
 from .errors import BiliAuthError, BiliError, BiliRisk, BudgetError
-from .models import Comment, DanmakuHotspot, Subtitle, Video
+from .models import Comment, CommentPostResult, DanmakuHotspot, Subtitle, Video
 from .traffic import TrafficGuard
 from .util import clean_text, parse_duration, strip_html
 
@@ -125,21 +126,23 @@ class BiliAPI:
     def has_write_cookie(self) -> bool:
         return bool(self.cookie.get("sessdata") and self.cookie.get("bili_jct"))
 
-    def _base_headers(self, referer: str = REFERER) -> dict[str, str]:
+    def _base_headers(self, referer: str = REFERER, use_cookie: bool = True) -> dict[str, str]:
         headers = {
             "user-agent": self.user_agent,
             "referer": referer,
             "accept": "application/json, text/plain, */*",
             "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
         }
-        cookie = self._cookie_header()
+        cookie = self._cookie_header(use_cookie=use_cookie)
         if cookie:
             headers["cookie"] = cookie
         return headers
 
-    def _cookie_header(self) -> str:
+    def _cookie_header(self, use_cookie: bool = True) -> str:
         bits = []
         for key in ("SESSDATA", "bili_jct", "buvid3"):
+            if not use_cookie and key != "buvid3":
+                continue
             value = self.cookie.get(key.lower()) or self.cookie.get(key) or ""
             if value:
                 bits.append(f"{key}={value}")
@@ -161,6 +164,7 @@ class BiliAPI:
         cache_key: str = "",
         cache_ttl: float = 0.0,
         timeout: float | None = None,
+        use_cookie: bool = True,
     ) -> dict[str, Any]:
         self._ensure()
         now = time.monotonic()
@@ -179,7 +183,7 @@ class BiliAPI:
             async with self._session.get(
                 url,
                 params=params or None,
-                headers=self._base_headers(referer),
+                headers=self._base_headers(referer, use_cookie=use_cookie),
                 timeout=timeout,
             ) as resp:
                 status = resp.status
@@ -266,24 +270,7 @@ class BiliAPI:
         }
 
     # ── 搜索 ─────────────────────────────────────────────────────────────
-    async def search(self, keyword: str, page: int = 1, page_size: int = 30) -> list[Video]:
-        keyword = clean_text(keyword, limit=60)
-        if not keyword:
-            return []
-        payload = await self._get_json(
-            "/x/web-interface/wbi/search/type",
-            {
-                "search_type": "video",
-                "keyword": keyword,
-                "page": max(1, int(page)),
-                "page_size": max(1, min(50, int(page_size))),
-                "order": "pubdate",
-            },
-            wbi=True,
-            referer=f"https://search.bilibili.com/all?keyword={quote(keyword)}",
-        )
-        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-        rows = data.get("result") or data.get("results") or []
+    def _videos_from_rows(self, rows: Any, limit: int = 60) -> list[Video]:
         videos: list[Video] = []
         if not isinstance(rows, list):
             return videos
@@ -300,6 +287,84 @@ class BiliAPI:
             if not video.duration:
                 video.duration = parse_duration(row.get("duration"))
             videos.append(video)
+            if len(videos) >= limit:
+                break
+        return videos
+
+    async def search(
+        self,
+        keyword: str,
+        page: int = 1,
+        page_size: int = 30,
+        order: str = "pubdate",
+    ) -> list[Video]:
+        keyword = clean_text(keyword, limit=60)
+        if not keyword:
+            return []
+        order = order if order in {"pubdate", "click", "dm", "totalrank"} else "pubdate"
+        payload = await self._get_json(
+            "/x/web-interface/wbi/search/type",
+            {
+                "search_type": "video",
+                "keyword": keyword,
+                "page": max(1, int(page)),
+                "page_size": max(1, min(50, int(page_size))),
+                "order": order,
+            },
+            wbi=True,
+            referer=f"https://search.bilibili.com/all?keyword={quote(keyword)}",
+        )
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        return self._videos_from_rows(data.get("result") or data.get("results") or [])
+
+    async def recommend(self, page_size: int = 30) -> list[Video]:
+        """当前账号的首页推荐流（按画像；不需要关键词）。"""
+        payload = await self._get_json(
+            "/x/web-interface/wbi/index/top/feed/rcmd",
+            {
+                "ps": max(1, min(40, int(page_size))),
+                "fresh_type": 4,
+                "feed_version": "V8",
+                "homepage_ver": 1,
+                "web_location": 1430650,
+                "y_num": 0,
+                "fresh_idx": 1,
+                "brush": 0,
+            },
+            wbi=True,
+            referer="https://www.bilibili.com/",
+        )
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        items = data.get("item") or data.get("data") or []
+        videos: list[Video] = []
+        if not isinstance(items, list):
+            return videos
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            goto = str(item.get("goto") or "")
+            bvid = str(item.get("bvid") or "").strip()
+            if goto and goto != "av":
+                continue
+            if not bvid.startswith("BV"):
+                continue
+            owner = item.get("owner") if isinstance(item.get("owner"), dict) else {}
+            stat = item.get("stat") if isinstance(item.get("stat"), dict) else {}
+            duration = item.get("duration")
+            videos.append(
+                Video(
+                    bvid=bvid,
+                    title=clean_text(strip_html(item.get("title")), limit=200),
+                    author=clean_text(strip_html(owner.get("name")), limit=60),
+                    mid=int(owner.get("mid") or 0),
+                    play=int(stat.get("view") or 0),
+                    pubdate=int(item.get("pubdate") or 0),
+                    duration=int(duration) if isinstance(duration, (int, float)) else parse_duration(duration),
+                    desc=clean_text(strip_html(item.get("desc")), limit=300),
+                )
+            )
+            if len(videos) >= max(1, min(40, int(page_size))):
+                break
         return videos
 
     # ── 视频信息 ─────────────────────────────────────────────────────────
@@ -643,8 +708,89 @@ class BiliAPI:
         data = payload.get("data")
         return data if isinstance(data, dict) else {}
 
+    async def _find_comment(self, aid: int, rpid: str, *, use_cookie: bool) -> bool:
+        """在评论区主列表前两页找 rpid；找不到不代表不存在，可能只是还没索引。"""
+        want = str(rpid or "").strip()
+        if not want:
+            return False
+        for page in (1, 2):
+            try:
+                payload = await self._get_json(
+                    "/x/v2/reply",
+                    {"type": 1, "oid": int(aid), "pn": page, "ps": 20, "sort": 0},
+                    referer="https://www.bilibili.com/",
+                    use_cookie=use_cookie,
+                )
+            except (BiliRisk, BudgetError):
+                raise
+            except BiliError:
+                break
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            rows = data.get("replies") or []
+            if not isinstance(rows, list):
+                break
+            for row in rows:
+                if isinstance(row, dict) and str(row.get("rpid") or "") == want:
+                    return True
+            if not rows:
+                break
+        return False
+
+    async def verify_comment(self, aid: int, rpid: str) -> CommentPostResult:
+        """code=0 只代表"进库了"；用匿名评论区列表再确认是否真的公开可见。
+
+        判定：
+        - 匿名列表能找到 → 真公开；
+        - 只有登录态能看到 → 仅自己可见/审核中（B 站常见的"假成功"）；
+        - 都找不到 → 复查不到（可能还在索引，也可能被吞）。
+        找不到时不要自动重发，避免重复评论。
+        """
+        rpid = str(rpid or "").strip()
+        if not rpid:
+            return CommentPostResult(reason="接口返回成功，但没有给出 rpid，无法复核")
+        self_view = False
+        last_error = ""
+        await asyncio.sleep(1.5)
+        for attempt in range(2):
+            if attempt:
+                await asyncio.sleep(2.0)
+            try:
+                if await self._find_comment(aid, rpid, use_cookie=False):
+                    return CommentPostResult(
+                        rpid=rpid,
+                        verified=True,
+                        visible_to_self=True,
+                        reason="匿名评论区已找到，确认公开可见",
+                    )
+            except (BiliRisk, BudgetError) as exc:
+                # 评论可能已经发出去了；复核被限流时不要再抛错诱发重发。
+                last_error = str(exc)
+                break
+            except BiliError as exc:
+                last_error = str(exc)
+            if not self_view:
+                try:
+                    self_view = await self._find_comment(aid, rpid, use_cookie=True)
+                except (BiliRisk, BudgetError) as exc:
+                    last_error = str(exc)
+                    break
+                except BiliError as exc:
+                    last_error = str(exc)
+        if self_view:
+            reason = "登录态能看到，但匿名列表看不到：仅自己可见/审核中（不要当成已公开）"
+        else:
+            reason = "登录态和匿名列表都没查到（可能仍在索引，也可能被吞）"
+        if last_error:
+            reason += f"；最后一次接口错误：{last_error}"
+        return CommentPostResult(
+            rpid=rpid,
+            verified=False,
+            visible_to_self=self_view,
+            reason=reason,
+        )
+
     # ── 写：发评论 ───────────────────────────────────────────────────────
-    async def post_comment(self, aid: int, message: str) -> str:
+    async def post_comment(self, aid: int, message: str) -> CommentPostResult:
         self._ensure()
         if not self.has_write_cookie:
             raise BiliAuthError("缺少 SESSDATA 或 bili_jct，无法发评论")
@@ -706,7 +852,10 @@ class BiliAPI:
                 raise BiliAuthError(f"发评论失败：登录态无效（code={code}：{message}）", code)
             raise BiliError(f"发评论失败：{message}（code={code}）", code)
         data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-        return str(data.get("rpid_str") or data.get("rpid") or "")
+        rpid = str(data.get("rpid_str") or data.get("rpid") or "")
+        if not rpid:
+            return CommentPostResult(reason="接口返回成功，但没有给出 rpid，无法复核")
+        return await self.verify_comment(aid, rpid)
 
 
 def _pick_track(tracks: list[dict[str, Any]], preferred: str) -> dict[str, Any] | None:

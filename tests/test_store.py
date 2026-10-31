@@ -45,6 +45,15 @@ class StoreTest(unittest.TestCase):
             self.assertEqual(store.read_report("2026-10-25"), "# 日报\n")
             self.assertEqual(store.list_reports(), ["2026-10-25"])
 
+    def test_comment_ledger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(tmp)
+            store.add_comment("BV1xx411c7mD", "第三分钟那个镜头切得真舒服")
+            store.add_comment("BV1yy411c7mD", "结尾那句台词有点东西")
+            rows = store.recent_comments(1)
+            self.assertEqual(rows, ["结尾那句台词有点东西"])
+            self.assertEqual(len(store.recent_comments(30)), 2)
+
     def test_corrupt_state_is_backed_up(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"

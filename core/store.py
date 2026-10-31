@@ -26,6 +26,7 @@ def _default_state() -> dict[str, Any]:
         "quota": {},
         "seen": {},
         "pending_share": {},
+        "memory_log": {},
         "last_umo": "",
         "last_run": "",
         "runs": 0,
@@ -37,6 +38,7 @@ class Store:
         self.base = Path(base_dir)
         self.report_dir = self.base / "reports"
         self.diary_dir = self.base / "diary"
+        self.comments_path = self.base / "comments.md"
         self.base.mkdir(parents=True, exist_ok=True)
         self.report_dir.mkdir(parents=True, exist_ok=True)
         (self.diary_dir / "owner").mkdir(parents=True, exist_ok=True)
@@ -129,6 +131,34 @@ class Store:
     def seen_count(self) -> int:
         seen = self.state.get("seen")
         return len(seen) if isinstance(seen, dict) else 0
+
+    # ── 评论台账（发布前检查用）─────────────────────────────────────────────
+    def recent_comments(self, limit: int = 30) -> list[str]:
+        """最近自己发过的评论正文；读不到就返回空列表。"""
+        try:
+            if not self.comments_path.exists():
+                return []
+            rows: list[str] = []
+            for line in self.comments_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line.startswith("- "):
+                    continue
+                body = line.split("·", 1)[1].strip() if "·" in line else line[2:].strip()
+                if body:
+                    rows.append(body)
+            return rows[-max(1, int(limit)):]
+        except (OSError, ValueError):
+            return []
+
+    def add_comment(self, bvid: str, text: str, day: str | None = None) -> None:
+        """记一条评论台账（一行：日期 BVID · 正文）。"""
+        body = " ".join(str(text or "").split())
+        if not body:
+            return
+        if not self.comments_path.exists():
+            self.comments_path.write_text("# 评论台账（发布前检查用）\n\n", encoding="utf-8")
+        with self.comments_path.open("a", encoding="utf-8") as fh:
+            fh.write(f"- {day or today_str()} {bvid or '-'} · {body}\n")
 
     # ── 待确认的分享 ──────────────────────────────────────────────────────
     def set_pending_share(self, payload: dict[str, Any]) -> None:

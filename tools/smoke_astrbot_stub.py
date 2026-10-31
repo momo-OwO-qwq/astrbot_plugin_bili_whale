@@ -193,6 +193,67 @@ async def main() -> int:
             assert persona == "STUB_SESSION_PERSONA", persona
             print("OK  persona ->", persona)
 
+            # auto 模式下 /bili 分享 不应生成待确认项，而是直接走 confirm_share
+            from astrbot_plugin_bili_whale.core.models import CommentPostResult
+
+            class _FakeRunner:
+                async def prepare_share(self, bvid):
+                    return {
+                        "bvid": bvid,
+                        "aid": 1,
+                        "title": "测试视频",
+                        "score": 16,
+                        "verdict": "值得看",
+                        "reason": "它讲清楚了原理",
+                        "comment": "@阿鲸 第三分钟那个例子很实在",
+                        "created_at": "2026-10-31T00:00:00",
+                    }
+
+                async def confirm_share(self, payload):
+                    return CommentPostResult(
+                        rpid="12345", verified=True, visible_to_self=True, reason="公开可见"
+                    )
+
+            async def _fake_runner(umo=None):
+                return _FakeRunner()
+
+            plugin._make_runner = _fake_runner
+            plugin.config["share"] = {
+                "enabled": True,
+                "auto_send": True,
+                "auto_on_manual": True,
+                "min_score": 13,
+                "max_per_day": 3,
+                "same_video_days": 7,
+                "min_reason_len": 8,
+                "max_chars": 40,
+                "style_gate": True,
+            }
+            event.message_str = "/bili 分享 BV1xx411c7mD"
+            replies = await collect(plugin.bili(event))
+            assert any("自动发出" in str(item[1]) for item in replies), replies
+            assert not plugin.store.get_pending_share(), "auto 模式不应留待确认"
+            print("OK  auto-share ->", str(replies[-1][1])[:40])
+
+            event.message_str = "/bili 分享设置"
+            replies = await collect(plugin.bili(event))
+            assert "自动发送（免确认）：开" in replies[0][1], replies
+            print("OK  share-settings ->", replies[0][1].splitlines()[2])
+
+            event.message_str = "/bili 分享设置 预览"
+            replies = await collect(plugin.bili(event))
+            assert "自动发送：关" in replies[0][1], replies
+            event.message_str = "/bili 分享设置 自动"
+            replies = await collect(plugin.bili(event))
+            assert "自动发送：开" in replies[0][1], replies
+            print("OK  share-settings toggle")
+
+            for tool in ("bili_post_comment", "bili_send_dm", "bili_memorize"):
+                assert hasattr(plugin, tool), tool
+            denied = await plugin.bili_post_comment(event, "BV1xx411c7mD", "好看")
+            assert "写操作默认关闭" in denied, denied
+            print("OK  write-tools gated")
+
             # 无 cookie 时不应发网络请求；_push 走 stub 的 send_message
             ok = await plugin._push("测试推送")
             assert ok and context.sent

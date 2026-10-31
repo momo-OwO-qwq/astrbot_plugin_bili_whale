@@ -1,4 +1,4 @@
-"""日报 / 摘要 / 单条视频速读的排版。
+"""日报排版。
 
 日报格式与 dsh-bili-scroll 保持兼容：每条视频单独一段，第一行固定是
 ``### BV号`` 顶格 —— 这样以后想接"刷过的视频"列表、统计条数都方便。
@@ -108,7 +108,7 @@ def build_dm_text(result: RunResult, max_chars: int = 300) -> str:
     """
     lines = []
     for line in (result.summary or "").splitlines():
-        if line.startswith("完整日报：") or line.startswith("（分享模式"):
+        if line.startswith("完整日报：") or line.startswith("（评论分享") or line.startswith("（分享模式"):
             continue
         if line.startswith("另有 "):
             continue

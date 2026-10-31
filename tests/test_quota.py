@@ -72,6 +72,19 @@ class QuotaTest(unittest.TestCase):
         q["shares_day"] = LIMITS.share_max_per_day
         self.assertFalse(quota.can_share(q, LIMITS, "BV1xx411c7mD", 20, "这条讲了具体的东西", NOW))
 
+    def test_share_switches(self):
+        self.assertFalse(quota.share_config_enabled({"share": {"enabled": False}}))
+        self.assertTrue(quota.share_config_enabled({"share": {"enabled": True}}))
+        self.assertTrue(quota.share_auto_enabled({"share": {"enabled": True, "auto_send": True}}))
+        self.assertFalse(quota.share_auto_enabled({"share": {"enabled": True, "auto_send": False}}))
+        self.assertFalse(quota.share_auto_enabled({"share": {"enabled": False, "auto_send": True}}))
+
+    def test_share_legacy_mode_fallback(self):
+        self.assertFalse(quota.share_config_enabled({"share": {"mode": "off"}}))
+        self.assertTrue(quota.share_config_enabled({"share": {"mode": "manual"}}))
+        self.assertTrue(quota.share_auto_enabled({"share": {"mode": "auto"}}))
+        self.assertFalse(quota.share_auto_enabled({"share": {"mode": "manual"}}))
+
     def test_dm_daily_cap_and_reset(self):
         q = fresh()
         for _ in range(LIMITS.dm_per_day):
