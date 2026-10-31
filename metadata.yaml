@@ -2,7 +2,7 @@ name: astrbot_plugin_bili_whale
 display_name: 养鱼刷B站
 short_desc: 扫码登录 + 首页推荐/关键词刷 B 站；读字幕、写日报/日记，评论发布前检查，推到 AstrBot 多平台/私信。
 desc: 把 dsh-bili-scroll 2.4 与 dsh-bili-whale 的生物钟/克制合并成 AstrBot 插件：扫码登录、首页推荐/关键词搜索、官方字幕与热评、日报和两本日记、评论发布前检查、AstrBot 多平台推送与 B 站私信；人格默认使用 AstrBot 人格。设置页按账号/生物钟/内容/人格/产出/分享/推送/自然语言合并分组。
-version: 0.2.0
+version: 0.2.1
 author: momo-OwO-qwq
 repo: "https://github.com/momo-OwO-qwq/astrbot_plugin_bili_whale"
 support_platforms:
