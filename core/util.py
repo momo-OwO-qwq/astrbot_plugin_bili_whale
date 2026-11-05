@@ -233,6 +233,76 @@ def extract_bvid(text: str) -> str | None:
     return match.group(0) if match else None
 
 
+def av2bv(aid: int) -> str | None:
+    """把 av 号（数字 aid）换成 BV 号。"""
+    try:
+        aid = int(aid)
+    except (TypeError, ValueError):
+        return None
+    if aid <= 0:
+        return None
+    table = "fZodR9XQDSUm21yCkr6zBqiveYah8bt4xsWpHnJE7jL5VG3guMTKNPAwcF"
+    positions = (11, 10, 3, 8, 4, 6)
+    value = (aid ^ 177451812) + 8728348608
+    chars = list("BV1  4 1 7  ")
+    for i, pos in enumerate(positions):
+        chars[pos] = table[(value // (58 ** i)) % 58]
+    return "".join(chars)
+
+
+_B23_RE = re.compile(r"(?:https?://)?b23\.tv/([0-9A-Za-z]+)")
+_VIDEO_URL_RE = re.compile(
+    r"(?:https?://)?(?:www\.|m\.)?bilibili\.com/video/(BV[0-9A-Za-z]{10}|av\d+)",
+    re.IGNORECASE,
+)
+
+
+async def resolve_bvid(text: str, timeout: float = 10.0) -> str | None:
+    """从一段话里找出视频号。
+
+    顺序：文本里直接有 BV → 用；``b23.tv/xxx`` 短链 → 跟随跳转再取；
+    ``bilibili.com/video/BV...`` 或 ``av...`` → 直接翻译；都不行返回 None。
+    """
+    raw = text or ""
+    direct = extract_bvid(raw)
+    if direct:
+        return direct
+
+    target = ""
+    match = _B23_RE.search(raw)
+    if match:
+        target = "https://b23.tv/" + match.group(1)
+    else:
+        match = _VIDEO_URL_RE.search(raw)
+        if match:
+            token = match.group(1)
+            if token.lower().startswith("bv"):
+                return token
+            return av2bv(token[2:])
+        bare_av = re.search(r"(?<![0-9A-Za-z])[aA][vV](\d{1,12})(?![0-9])", raw)
+        if bare_av:
+            return av2bv(bare_av.group(1))
+        return None
+
+    try:
+        import aiohttp
+    except ImportError:  # pragma: no cover - AstrBot 自带 aiohttp
+        return None
+
+    try:
+        timeout_obj = aiohttp.ClientTimeout(total=max(3.0, timeout))
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        async with aiohttp.ClientSession(timeout=timeout_obj) as session:
+            async with session.get(target, allow_redirects=True, headers=headers) as resp:
+                found = extract_bvid(str(resp.url))
+                if found:
+                    return found
+                body = await resp.text(errors="replace")
+                return extract_bvid(body)
+    except Exception:
+        return None
+
+
 def safe_filename(text: str, limit: int = 40) -> str:
     value = re.sub(r"[\\/:*?\"<>|\s]+", "-", clean_text(text, limit=limit))
     return value.strip("-.") or "untitled"

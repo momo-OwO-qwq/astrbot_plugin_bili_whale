@@ -1,5 +1,10 @@
 # Changelog
 
+## 未发布
+
+- **短链与 av 号**：`bili_video_digest`、`bili_comments`、`bili_post_comment`、`/bili 看`、`/bili 分享` 现在都接受 `b23.tv` 短链和 `av` 号，自动展开成 BV；新增 `core.util.resolve_bvid()` 与 `av2bv()`，工具说明里也写明了「不要回答打不开链接」。
+- **B 站 @ 通知**：新增 `rhythm.mentions_enabled`（默认开）与 `rhythm.mentions_interval_min`（默认 3 分钟），定期查「@我的」；有人 @ 就转告，@ 的是视频就直接读懂再推送到 `push.targets`。
+
 ## 0.2.1 — 2026-10-31
 
 - 版本号递增到 0.2.1，用于插件市场重新发布（同步作者 `momo-OwO-qwq` 与支持平台声明）。

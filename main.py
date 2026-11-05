@@ -42,6 +42,7 @@ try:  # 正常情况：插件作为包加载，使用相对导入。
         chunk_text,
         clean_text,
         extract_bvid,
+        resolve_bvid,
         human_count,
         human_duration,
         now_local,
@@ -74,6 +75,7 @@ except ImportError:  # 兼容"以单文件方式"加载 main.py 的宿主
         chunk_text,
         clean_text,
         extract_bvid,
+        resolve_bvid,
         human_count,
         human_duration,
         now_local,
@@ -192,6 +194,8 @@ class BiliWhalePlugin(Star):
         self._qr_task: asyncio.Task | None = None
         self._warned_no_cookie = False
         self._bad_window_warned = False
+        self._last_mention_poll = 0.0
+        self._mention_lock = asyncio.Lock()
         self._start_ticker()
 
     # ── 生命周期 ─────────────────────────────────────────────────────────
@@ -242,6 +246,12 @@ class BiliWhalePlugin(Star):
 
     # ── 生物钟 ───────────────────────────────────────────────────────────
     async def _tick(self) -> None:
+        try:
+            await self._poll_mentions()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("[bili-whale] 轮询 @ 通知失败")
         if not as_bool(cfg_get(self.config, "rhythm.enabled", True), True):
             return
         if not self._cookie_dict().get("sessdata"):
@@ -691,6 +701,69 @@ class BiliWhalePlugin(Star):
                 break
         return ok
 
+    # ── B 站 @ 通知 ──────────────────────────────────────────────────────
+    async def _poll_mentions(self) -> None:
+        """轮询 B 站「@我的」，有人 @ 就要么转告、要么直接读懂那条视频。"""
+        if not as_bool(cfg_get(self.config, "rhythm.mentions_enabled", True), True):
+            return
+        interval = as_int(cfg_get(self.config, "rhythm.mentions_interval_min", 3), 3, 1, 120)
+        loop = asyncio.get_running_loop()
+        if loop.time() - self._last_mention_poll < interval * 60:
+            return
+        self._last_mention_poll = loop.time()
+        if not self._cookie_dict().get("sessdata"):
+            return
+        if self._mention_lock.locked():
+            return
+        async with self._mention_lock:
+            api = await self._ensure_api()
+            payload = await api._get_json(
+                "/x/msgfeed/at",
+                {"build": 0, "mobi_app": "web", "platform": "web", "ps": 10},
+                wbi=True,
+            )
+            items = ((payload.get("data") or {}).get("items") or [])
+            seen = [str(x) for x in (self.store.get("mentions_seen", []) or [])]
+            seen_set = set(seen)
+            fresh = [it for it in items if str(it.get("id")) not in seen_set]
+            logger.info("[bili-whale] 轮询 @ 通知：接口 %d 条，新 %d 条", len(items), len(fresh))
+            if not fresh:
+                return
+            for it in reversed(fresh):  # 从旧到新，按发生顺序说
+                seen.append(str(it.get("id")))
+                try:
+                    await self._handle_mention(it)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("[bili-whale] 处理 @ 通知失败")
+            self.store.set("mentions_seen", seen[-200:])
+
+    async def _handle_mention(self, item: dict) -> None:
+        user = (item.get("user") or {}).get("nickname") or "有人"
+        body = item.get("item") or {}
+        title = clean_text(body.get("title") or "", 60)
+        content = clean_text(body.get("source_content") or "", 200)
+        uri = str(body.get("uri") or "")
+        bvid = extract_bvid(uri)
+        head = f"🐟 B站有人 @ 我：{user}"
+        if title:
+            head += f"｜《{title}》"
+        if content:
+            head += f"\n“{content}”"
+        if not bvid:
+            ok = await self._push(head)
+            logger.info("[bili-whale] @ 通知转告 %s：push=%s", user, ok)
+            return
+        try:
+            runner = await self._make_runner(self._primary_umo())
+            text, _ = await runner.digest(bvid)
+            ok = await self._push(f"{head}\n\n{text}\n\n{uri}")
+            logger.info("[bili-whale] @ 通知读视频 %s：push=%s len=%d", bvid, ok, len(text))
+        except Exception as exc:
+            ok = await self._push(f"{head}\n\n视频 {bvid} 没读成：{_err_text(exc)}\n{uri}")
+            logger.info("[bili-whale] @ 通知读视频失败 %s：push=%s", bvid, ok)
+
     def _save_config(self) -> None:
         try:
             save = getattr(self.config, "save_config", None)
@@ -801,7 +874,7 @@ class BiliWhalePlugin(Star):
             return
 
         if lower in {"看", "看懂", "视频", "digest", "读"}:
-            bvid = extract_bvid(arg)
+            bvid = await resolve_bvid(arg)
             if not bvid:
                 yield event.plain_result("用法：/bili 看 BV1xx...")
                 return
@@ -995,7 +1068,7 @@ class BiliWhalePlugin(Star):
             if not quota_mod.share_config_enabled(self.config):
                 yield event.plain_result("评论分享是关的（share.enabled = false）。先发 /bili 分享设置 开，或在插件配置里打开。")
                 return
-            bvid = extract_bvid(arg)
+            bvid = await resolve_bvid(arg)
             if not bvid:
                 yield event.plain_result("用法：/bili 分享 BV1xx...")
                 return
@@ -1082,7 +1155,7 @@ class BiliWhalePlugin(Star):
             return
 
         # /bili BV1xx... 直接当"看懂"
-        bvid = extract_bvid(tail)
+        bvid = await resolve_bvid(tail)
         if bvid:
             yield event.plain_result(f"🐟 正在读 {bvid}…")
             try:
@@ -1115,12 +1188,15 @@ class BiliWhalePlugin(Star):
     async def bili_video_digest(self, event: AstrMessageEvent, bvid: str) -> str:
         """看懂一条 B 站视频：读官方字幕、热评和弹幕热区，然后总结。
 
+        主人发来 b23.tv 短链、bilibili.com 视频链接、BV 号、av 号时都应该调用本工具，
+        不要回答"打不开链接""看不到视频"。工具会自己把短链展开成 BV 号。
+
         Args:
-            bvid(string): B 站 BV 号，例如 BV1xx411c7mD
+            bvid(string): B 站 BV 号 / av 号 / b23.tv 短链 / bilibili.com 视频链接
         """
         if not self._llm_tools_allowed():
             return "自然语言工具已关闭。"
-        code = extract_bvid(bvid)
+        code = await resolve_bvid(bvid)
         if not code:
             return "这不像一个 BV 号。"
         if not event.get_group_id() or self._can_manage(event):
@@ -1233,12 +1309,12 @@ class BiliWhalePlugin(Star):
         """读取一条 B 站视频的热门评论。
 
         Args:
-            bvid(string): B 站 BV 号
+            bvid(string): B 站 BV 号 / av 号 / b23.tv 短链 / 视频链接 / av 号 / b23.tv 短链 / 视频链接
             count(number): 取几条，默认 10，最多 20
         """
         if not self._llm_tools_allowed():
             return "自然语言工具已关闭。"
-        code = extract_bvid(bvid)
+        code = await resolve_bvid(bvid)
         if not code:
             return "这不像一个 BV 号。"
         try:
@@ -1308,7 +1384,7 @@ class BiliWhalePlugin(Star):
             return "群聊里只有管理员能让模型发评论。"
         if event.get_group_id() and not quota_mod.share_config_enabled(self.config):
             return "评论分享总开关是关的（share.enabled）。"
-        code = extract_bvid(bvid)
+        code = await resolve_bvid(bvid)
         if not code:
             return "这不像一个 BV 号。"
         text = clean_text(message, limit=500, keep_newlines=False)
@@ -1386,7 +1462,7 @@ class BiliWhalePlugin(Star):
         text = clean_text(content, limit=max(50, policy.max_chars), keep_newlines=False)
         if not text:
             return "要记住的内容是空的。"
-        code = extract_bvid(bvid) if bvid else ""
+        code = await resolve_bvid(bvid) if bvid else ""
         meta = {"kind": "bili_note", "date": today_str()}
         if code:
             meta["bvid"] = code

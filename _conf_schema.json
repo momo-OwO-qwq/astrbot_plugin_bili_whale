@@ -113,6 +113,23 @@
           "max": 120,
           "step": 1
         }
+      },
+      "mentions_enabled": {
+        "type": "bool",
+        "description": "有人 @ 我时转告（有视频就直接读懂）",
+        "hint": "轮询 B 站「@我的」通知；默认开。只在开了 B 站 cookie 时生效。",
+        "default": true
+      },
+      "mentions_interval_min": {
+        "type": "int",
+        "description": "隔几分钟查一次 @ 通知",
+        "hint": "太短会频繁请求 B 站接口，默认 3 分钟。",
+        "default": 3,
+        "slider": {
+          "min": 1,
+          "max": 30,
+          "step": 1
+        }
       }
     }
   },
