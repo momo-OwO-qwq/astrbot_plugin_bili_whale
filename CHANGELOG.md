@@ -1,12 +1,14 @@
 # Changelog
 
-## 未发布
+## 0.2.2 — 2026-11-01
 
 - **短链与 av 号**：`bili_video_digest`、`bili_comments`、`bili_post_comment`、`/bili 看`、`/bili 分享` 现在都接受 `b23.tv` 短链和 `av` 号，自动展开成 BV；新增 `core.util.resolve_bvid()` 与 `av2bv()`，工具说明里也写明了「不要回答打不开链接」。
 - **B 站 @ 通知**：新增 `rhythm.mentions_enabled`（默认开）与 `rhythm.mentions_interval_min`（默认 3 分钟），定期查「@我的」；有人 @ 就转告，@ 的是视频就直接读懂再推送到 `push.targets`。
 - **@ 通知的边界**：首次开启只记基线，不补推历史 @；转告走全部推送目标；推送失败不记账、下一轮重试（连续 3 次放弃）；单轮最多自动读懂 2 条，每条 120 秒超时；作息窗口外只转告、不花模型额度；自动摘要不再把视频写进「已看过」。
 - **短链解析更稳**：只认 302 落地 URL、`<link rel=canonical>` 与 `og:url`，不再整页扫第一个 BV；`bilibili://video/…` App 链接可用；小写 `bv…` 统一成 `BV…`；展开失败会记日志而不是静默返回。
 - **测试**：`tests/test_shortlink.py` 改成 `unittest`（16 个用例，含假 aiohttp），`python3 -m unittest discover -s tests` 可发现。
+- **@ 通知不拖生物钟**：轮询与读懂放进后台任务，读懂慢不会把生物钟那一轮往后推；生物钟关着但 @ 通知开着时，定时器也会起来。
+- **测试**：新增 `tests/test_mentions.py`（13 个用例：作息窗口闸门、基线、推送失败重试、未解析链接、单轮上限、定时器生命周期）。
 
 ## 0.2.1 — 2026-10-31
 
