@@ -41,7 +41,6 @@ try:  # 正常情况：插件作为包加载，使用相对导入。
         cfg_get,
         chunk_text,
         clean_text,
-        extract_bvid,
         resolve_bvid,
         human_count,
         human_duration,
@@ -74,7 +73,6 @@ except ImportError:  # 兼容"以单文件方式"加载 main.py 的宿主
         cfg_get,
         chunk_text,
         clean_text,
-        extract_bvid,
         resolve_bvid,
         human_count,
         human_duration,
@@ -86,11 +84,17 @@ except ImportError:  # 兼容"以单文件方式"加载 main.py 的宿主
 PLUGIN_NAME = "astrbot_plugin_bili_whale"
 VERSION = "0.2.1"
 
+# B 站 @ 通知：一页最多取这么多；每条通知最多自动读懂这么多条视频；
+# 单条读懂超过这个秒数就放弃（免得卡住整个轮询和生物钟）。
+_MENTION_PAGE = 10
+_MENTION_DIGEST_MAX = 2
+_MENTION_DIGEST_TIMEOUT = 120.0
+
 HELP_TEXT = """🐟 养鱼刷B站 —— 指令
 
 /bili 状态          看账号、作息、今天的计划、额度
 /bili 现在刷        立刻刷一轮（不占用生物钟次数）
-/bili 看 BV1xx...   看懂一条视频（字幕+热评+弹幕）
+/bili 看 视频号      看懂一条视频（BV / av / b23.tv 短链都行）
 /bili 搜 关键词     搜几条视频
 /bili 日报 [日期]   看日报（默认今天）
 /bili 日记 [日期]   看两本日记（私聊里更安全）
@@ -100,7 +104,7 @@ HELP_TEXT = """🐟 养鱼刷B站 —— 指令
 /bili 登录          扫码登录（推荐，不用手抄 cookie）
 /bili 体检          登录态 / 依赖 / 模型 / 配额自检
 /bili 额度          看今天读/写/分享额度与熔断状态
-/bili 分享 BV...    开启自动发送时直接发；加「预览」只看不发
+/bili 分享 视频号   开启自动发送时直接发；加「预览」只看不发
 /bili 确认          发送上一条预览（预览确认模式用）
 /bili 取消          取消待确认的分享
 /bili 分享设置      查看/修改：允许分享、自动发送、手动刷自动
@@ -125,6 +129,12 @@ def _data_dir() -> Path:
         base = Path("data") / "plugin_data" / PLUGIN_NAME
     base.mkdir(parents=True, exist_ok=True)
     return base
+
+
+def _looks_like_video_link(text: str) -> bool:
+    """看起来是视频链接（哪怕还没解析成 BV），用于给出更有用的提示。"""
+    value = (text or "").lower()
+    return "b23.tv/" in value or "/video/" in value or "bilibili://video/" in value
 
 
 def _command_tail(message: str) -> str:
@@ -250,6 +260,9 @@ class BiliWhalePlugin(Star):
             await self._poll_mentions()
         except asyncio.CancelledError:
             raise
+        except (BudgetError, BiliRisk):
+            # 额度用完或风控熔断：安静跳过，等下一次恢复，不刷异常栈。
+            logger.info("[bili-whale] 额度或风控限制中，这一轮跳过 @ 通知")
         except Exception:
             logger.exception("[bili-whale] 轮询 @ 通知失败")
         if not as_bool(cfg_get(self.config, "rhythm.enabled", True), True):
@@ -706,63 +719,149 @@ class BiliWhalePlugin(Star):
         """轮询 B 站「@我的」，有人 @ 就要么转告、要么直接读懂那条视频。"""
         if not as_bool(cfg_get(self.config, "rhythm.mentions_enabled", True), True):
             return
-        interval = as_int(cfg_get(self.config, "rhythm.mentions_interval_min", 3), 3, 1, 120)
+        if not self._cookie_dict().get("sessdata"):
+            return
+        interval = as_int(cfg_get(self.config, "rhythm.mentions_interval_min", 3), 3, 1, 30)
         loop = asyncio.get_running_loop()
         if loop.time() - self._last_mention_poll < interval * 60:
             return
         self._last_mention_poll = loop.time()
-        if not self._cookie_dict().get("sessdata"):
-            return
         if self._mention_lock.locked():
             return
         async with self._mention_lock:
             api = await self._ensure_api()
-            payload = await api._get_json(
-                "/x/msgfeed/at",
-                {"build": 0, "mobi_app": "web", "platform": "web", "ps": 10},
-                wbi=True,
-            )
-            items = ((payload.get("data") or {}).get("items") or [])
-            seen = [str(x) for x in (self.store.get("mentions_seen", []) or [])]
+            items = await api.mentions(_MENTION_PAGE)
+            if len(items) >= _MENTION_PAGE:
+                # 接口一页就这么多；两次轮询之间被 @ 更多就只能漏，记一笔方便排查。
+                logger.info("[bili-whale] @ 通知接口返回满页（%d 条），可能还有更早的没取到", len(items))
+
+            stored = self.store.get("mentions_seen")
+            seen = [str(x) for x in (stored or [])]
+            if stored is None:
+                # 第一次启用：只记基线，不把历史 @ 一次性全推出去。
+                self.store.set("mentions_seen", [str(it.get("id")) for it in items][:200])
+                logger.info("[bili-whale] 第一次轮询 @ 通知：记录 %d 条基线，不推送", len(items))
+                return
+
             seen_set = set(seen)
+            failed = {
+                str(k): int(v)
+                for k, v in (self.store.get("mentions_failed", {}) or {}).items()
+            }
             fresh = [it for it in items if str(it.get("id")) not in seen_set]
             logger.info("[bili-whale] 轮询 @ 通知：接口 %d 条，新 %d 条", len(items), len(fresh))
             if not fresh:
                 return
+
+            digests = 0
+            # 作息窗口外只转告、不花模型额度去读懂；生物钟关掉时不设这个限制。
+            digests_ok = self._mentions_may_digest()
             for it in reversed(fresh):  # 从旧到新，按发生顺序说
-                seen.append(str(it.get("id")))
+                mid = str(it.get("id"))
+                if failed.get(mid, 0) >= 3:
+                    seen.append(mid)  # 连续三次发不出去，认了，别把队列卡死
+                    continue
                 try:
-                    await self._handle_mention(it)
+                    ok, digested = await self._handle_mention(
+                        it, allow_digest=digests_ok and digests < _MENTION_DIGEST_MAX
+                    )
                 except asyncio.CancelledError:
                     raise
                 except Exception:
                     logger.exception("[bili-whale] 处理 @ 通知失败")
+                    ok, digested = False, False
+                if ok:
+                    seen.append(mid)
+                    failed.pop(mid, None)
+                    if digested:
+                        digests += 1
+                else:
+                    # 发失败就不记账，下一轮重试；三次之后放弃。
+                    failed[mid] = failed.get(mid, 0) + 1
             self.store.set("mentions_seen", seen[-200:])
+            self.store.set("mentions_failed", dict(list(failed.items())[-50:]))
 
-    async def _handle_mention(self, item: dict) -> None:
+    def _mentions_may_digest(self) -> bool:
+        """现在是否值得花模型额度读懂 @ 里的视频。
+
+        生物钟开着时只在作息窗口内读（半夜被 @ 只转告）；生物钟关着就听用户的。
+        """
+        if not as_bool(cfg_get(self.config, "rhythm.enabled", True), True):
+            return True
+        spec = str(cfg_get(self.config, "rhythm.window", "20:00-24:00") or "20:00-24:00")
+        try:
+            windows = planner.parse_windows(spec)
+        except ValueError:
+            return True  # 窗口写错了，按"不限制"处理，别让通知悄悄失效
+        now = now_local()
+        minute = now.hour * 60 + now.minute
+        for window in windows:
+            if window.start <= minute < window.end:
+                return True
+            # 跨午夜：昨天开的窗今天还在。
+            if window.end > 1440 and minute + 1440 < window.end:
+                return True
+        return False
+
+    async def _handle_mention(
+        self, item: dict, allow_digest: bool = True
+    ) -> tuple[bool, bool]:
+        """处理一条 @：能认出视频且还有预算就直接读懂，否则只转告。
+
+        返回 ``(是否送达, 是否真的读懂了)``；送达与否决定这条通知要不要重试。
+        """
         user = (item.get("user") or {}).get("nickname") or "有人"
         body = item.get("item") or {}
         title = clean_text(body.get("title") or "", 60)
         content = clean_text(body.get("source_content") or "", 200)
         uri = str(body.get("uri") or "")
-        bvid = extract_bvid(uri)
+        bvid = None
+        if uri:
+            bvid = await resolve_bvid(uri)
         head = f"🐟 B站有人 @ 我：{user}"
         if title:
             head += f"｜《{title}》"
         if content:
             head += f"\n“{content}”"
         if not bvid:
-            ok = await self._push(head)
+            if _looks_like_video_link(uri):
+                # 认得出是视频，只是没展开成 BV：把原链接带上，别让通知只剩一句话。
+                head += f"\n{uri}"
+            ok = await self._push_all(head)
             logger.info("[bili-whale] @ 通知转告 %s：push=%s", user, ok)
-            return
+            return ok, False
+        if not allow_digest:
+            ok = await self._push_all(f"{head}\n\n视频 {bvid} 这轮自动读的条数到上限了，点开看吧：{uri}")
+            logger.info("[bili-whale] @ 通知跳过读懂（超上限）%s：push=%s", bvid, ok)
+            return ok, False
         try:
             runner = await self._make_runner(self._primary_umo())
-            text, _ = await runner.digest(bvid)
-            ok = await self._push(f"{head}\n\n{text}\n\n{uri}")
+            text, _ = await asyncio.wait_for(
+                runner.digest(bvid, source="B站@通知", mark_seen=False),
+                timeout=_MENTION_DIGEST_TIMEOUT,
+            )
+            ok = await self._push_all(f"{head}\n\n{text}\n\n{uri}")
             logger.info("[bili-whale] @ 通知读视频 %s：push=%s len=%d", bvid, ok, len(text))
+            return ok, ok
+        except asyncio.TimeoutError:
+            logger.warning("[bili-whale] @ 通知读视频超时 %s", bvid)
+            ok = await self._push_all(f"{head}\n\n视频 {bvid} 读得太久，先不读了：{uri}")
+            return ok, False
         except Exception as exc:
-            ok = await self._push(f"{head}\n\n视频 {bvid} 没读成：{_err_text(exc)}\n{uri}")
+            ok = await self._push_all(f"{head}\n\n视频 {bvid} 没读成：{_err_text(exc)}\n{uri}")
             logger.info("[bili-whale] @ 通知读视频失败 %s：push=%s", bvid, ok)
+            return ok, False
+
+    async def _push_all(self, text: str) -> bool:
+        """@ 通知走 push.targets 的全部目标，而不是只听第一个。"""
+        targets = self._target_umos()
+        if not targets:
+            logger.warning("[bili-whale] @ 通知没有推送目标：先 /bili 订阅，或填 push.targets")
+            return False
+        ok = True
+        for target in targets:
+            ok = await self._push(text, umo=target) and ok
+        return ok
 
     def _save_config(self) -> None:
         try:
@@ -876,7 +975,7 @@ class BiliWhalePlugin(Star):
         if lower in {"看", "看懂", "视频", "digest", "读"}:
             bvid = await resolve_bvid(arg)
             if not bvid:
-                yield event.plain_result("用法：/bili 看 BV1xx...")
+                yield event.plain_result("用法：/bili 看 BV1xx... / av170001 / b23.tv/xxx")
                 return
             yield event.plain_result(f"🐟 正在读 {bvid}（字幕 + 热评 + 弹幕）…")
             try:
@@ -1070,7 +1169,7 @@ class BiliWhalePlugin(Star):
                 return
             bvid = await resolve_bvid(arg)
             if not bvid:
-                yield event.plain_result("用法：/bili 分享 BV1xx...")
+                yield event.plain_result("用法：/bili 分享 BV1xx... / av170001 / b23.tv/xxx")
                 return
             preview = ("预览" in arg) or ("preview" in arg.lower())
             auto = quota_mod.share_auto_enabled(self.config)
@@ -1165,6 +1264,12 @@ class BiliWhalePlugin(Star):
                     yield event.plain_result(chunk)
             except Exception as exc:
                 yield event.plain_result(_err_text(exc))
+            return
+        if _looks_like_video_link(tail):
+            yield event.plain_result(
+                "🐟 认出这是视频链接，但没展开成 BV 号（可能是短链跳转或网络问题）。\n"
+                "可以稍后再试，或直接发 BV 号。"
+            )
             return
 
         yield event.plain_result(f"没看懂这个子命令：{sub}\n\n" + HELP_TEXT)
@@ -1309,7 +1414,7 @@ class BiliWhalePlugin(Star):
         """读取一条 B 站视频的热门评论。
 
         Args:
-            bvid(string): B 站 BV 号 / av 号 / b23.tv 短链 / 视频链接 / av 号 / b23.tv 短链 / 视频链接
+            bvid(string): B 站 BV 号 / av 号 / b23.tv 短链 / 视频链接
             count(number): 取几条，默认 10，最多 20
         """
         if not self._llm_tools_allowed():
@@ -1375,7 +1480,7 @@ class BiliWhalePlugin(Star):
         """在某条 B 站视频下发一条真实评论（会真的发布到 B 站，需显式开启）。
 
         Args:
-            bvid(string): B 站 BV 号，例如 BV1xx411c7mD
+            bvid(string): B 站 BV 号 / av 号 / b23.tv 短链 / 视频链接
             message(string): 评论正文，1~500 字，不要带引号或 Markdown
         """
         if not self._llm_write_allowed():

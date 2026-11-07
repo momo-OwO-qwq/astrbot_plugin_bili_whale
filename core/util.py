@@ -6,11 +6,14 @@
 from __future__ import annotations
 
 import html
+import logging
 import math
 import re
 import unicodedata
 from datetime import date, datetime, timedelta
 from typing import Any, Iterable, Mapping
+
+logger = logging.getLogger("bili_whale.util")
 
 # 控制字符（保留换行/制表）—— 评论区、字幕里偶尔会混进终端控制序列，
 # 拼进提示词或消息前统一清掉。
@@ -18,7 +21,7 @@ _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _TAG_RE = re.compile(r"<[^>]+>")
 _SPACE_RE = re.compile(r"[ \t\u3000]+")
 _MULTI_NL_RE = re.compile(r"\n{3,}")
-_BV_RE = re.compile(r"BV[0-9A-Za-z]{10}")
+_BV_RE = re.compile(r"[Bb][Vv][0-9A-Za-z]{10}")
 _URL_RE = re.compile(r"https?://[^\s<>\"']+")
 
 # 提示注入的常见开头。不是"过滤器"，只是给日志和兜底摘要一个标记；
@@ -229,8 +232,12 @@ def chunk_text(text: str, size: int = 1500, max_chunks: int = 12) -> list[str]:
 
 
 def extract_bvid(text: str) -> str | None:
+    """从文本里抽第一个 BV 号；前缀大小写不敏感，统一成 ``BV``。"""
     match = _BV_RE.search(text or "")
-    return match.group(0) if match else None
+    if not match:
+        return None
+    value = match.group(0)
+    return "BV" + value[2:]
 
 
 def av2bv(aid: int) -> str | None:
@@ -255,13 +262,42 @@ _VIDEO_URL_RE = re.compile(
     r"(?:https?://)?(?:www\.|m\.)?bilibili\.com/video/(BV[0-9A-Za-z]{10}|av\d+)",
     re.IGNORECASE,
 )
+_BARE_AV_RE = re.compile(r"(?<![0-9A-Za-z])[aA][vV](\d{1,12})(?![0-9])")
+# App 内分享出来的链接是 bilibili://video/170001 或 bilibili://video/BV1xx…
+# B 站「@我的」接口里的 uri 就是这种形式。
+_APP_URI_RE = re.compile(
+    r"bilibili://video/(BV[0-9A-Za-z]{10}|\d{1,12})", re.IGNORECASE
+)
+# 短链 302 落到视频页时，URL 里正常就有 BV；只有落到壳页面才需要看这两处。
+_CANONICAL_RE = re.compile(
+    r"""<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']""", re.IGNORECASE
+)
+_OG_URL_RE = re.compile(
+    r"""<meta[^>]+property=["']og:url["'][^>]+content=["']([^"']+)["']""", re.IGNORECASE
+)
+
+
+def normalize_bvid(token: str | None) -> str | None:
+    """把 ``bv1xx…`` / ``BV1xx…`` 统一成大写前缀，非法值返回 None。"""
+    if not token:
+        return None
+    value = token.strip()
+    if len(value) == 12 and value[:2].lower() == "bv":
+        candidate = "BV" + value[2:]
+    else:
+        candidate = value
+    return candidate if _BV_RE.fullmatch(candidate) else None
 
 
 async def resolve_bvid(text: str, timeout: float = 10.0) -> str | None:
     """从一段话里找出视频号。
 
-    顺序：文本里直接有 BV → 用；``b23.tv/xxx`` 短链 → 跟随跳转再取；
+    顺序：文本里直接有 BV → 用；``bilibili://video/...`` App 链接 →
+    av 号翻译或 BV 直接取；``b23.tv/xxx`` 短链 → 跟随跳转再取；
     ``bilibili.com/video/BV...`` 或 ``av...`` → 直接翻译；都不行返回 None。
+
+    短链展开失败时只记日志、返回 None：调用方据此提示"没认出视频号"，
+    而不是把网络故障当成用户输入错误。
     """
     raw = text or ""
     direct = extract_bvid(raw)
@@ -269,17 +305,23 @@ async def resolve_bvid(text: str, timeout: float = 10.0) -> str | None:
         return direct
 
     target = ""
-    match = _B23_RE.search(raw)
-    if match:
-        target = "https://b23.tv/" + match.group(1)
+    app = _APP_URI_RE.search(raw)
+    link = _B23_RE.search(raw)
+    if app:
+        token = app.group(1)
+        if token[:2].lower() == "bv":
+            return normalize_bvid(token)
+        return av2bv(token)
+    if link:
+        target = "https://b23.tv/" + link.group(1)
     else:
         match = _VIDEO_URL_RE.search(raw)
         if match:
             token = match.group(1)
-            if token.lower().startswith("bv"):
-                return token
+            if token[:2].lower() == "bv":
+                return normalize_bvid(token)
             return av2bv(token[2:])
-        bare_av = re.search(r"(?<![0-9A-Za-z])[aA][vV](\d{1,12})(?![0-9])", raw)
+        bare_av = _BARE_AV_RE.search(raw)
         if bare_av:
             return av2bv(bare_av.group(1))
         return None
@@ -287,19 +329,44 @@ async def resolve_bvid(text: str, timeout: float = 10.0) -> str | None:
     try:
         import aiohttp
     except ImportError:  # pragma: no cover - AstrBot 自带 aiohttp
+        logger.warning("[bili-whale] 解析短链需要 aiohttp，但没装上：%s", target)
         return None
 
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
         timeout_obj = aiohttp.ClientTimeout(total=max(3.0, timeout))
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         async with aiohttp.ClientSession(timeout=timeout_obj) as session:
             async with session.get(target, allow_redirects=True, headers=headers) as resp:
                 found = extract_bvid(str(resp.url))
                 if found:
                     return found
+                if resp.status != 200:
+                    logger.warning(
+                        "[bili-whale] 短链展开失败：HTTP %s，%s", resp.status, target
+                    )
+                    return None
+                ctype = str(resp.headers.get("Content-Type") or "").lower()
+                if "html" not in ctype:
+                    # 不是网页，继续扫全文只会撞出乱七八糟的 BV。
+                    logger.warning(
+                        "[bili-whale] 短链展开后不是网页（%s）：%s", ctype or "?", target
+                    )
+                    return None
                 body = await resp.text(errors="replace")
-                return extract_bvid(body)
-    except Exception:
+                for pattern in (_CANONICAL_RE, _OG_URL_RE):
+                    page = pattern.search(body)
+                    if page:
+                        found = extract_bvid(page.group(1))
+                        if found:
+                            return found
+                logger.warning(
+                    "[bili-whale] 短链没跳到视频页：%s → %s", target, str(resp.url)[:120]
+                )
+                return None
+    except Exception as exc:  # 超时、证书、DNS 都可能，别吞掉线索
+        logger.warning(
+            "[bili-whale] 短链展开出错 %s：%s: %s", target, type(exc).__name__, exc
+        )
         return None
 
 

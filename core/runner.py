@@ -512,7 +512,18 @@ class Runner:
             return 0, f"（这次没分享成功：{exc}）"
 
     # ── 手动：看懂一条 / 搜一下 ──────────────────────────────────────────
-    async def digest(self, bvid: str) -> tuple[str, DeepResult]:
+    async def digest(
+        self,
+        bvid: str,
+        *,
+        source: str = "手动-看懂",
+        mark_seen: bool = True,
+    ) -> tuple[str, DeepResult]:
+        """读懂一条视频。
+
+        ``source`` 只用于"看过"的记录文案；``mark_seen=False`` 时（比如 B 站
+        @ 通知触发的自动摘要）不写进已看列表，免得生物钟以为这条已经看过了。
+        """
         video = await self.api.video_info(bvid)
         material = await self._gather_material(video, comments_limit=6)
         if not material.has_subtitle and not material.danmaku and len(material.comments) < 3:
@@ -523,7 +534,8 @@ class Runner:
         else:
             result = fallback_deep(material)
         result = result.normalized()
-        self.store.mark_seen(material.video, "手动-看懂")
+        if mark_seen:
+            self.store.mark_seen(material.video, source)
         return build_digest_text(material, result), result
 
     async def search(self, keyword: str) -> list[Video]:

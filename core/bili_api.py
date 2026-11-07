@@ -607,6 +607,27 @@ class BiliAPI:
         return out
 
     # ── 关系 / 写：B 站私信 ──────────────────────────────────────────────
+    async def mentions(self, page_size: int = 10) -> list[dict[str, Any]]:
+        """最近「@我的」通知，新到旧。
+
+        只取一页（接口最多给 10 条左右）。需要 cookie；没有 cookie 时直接返回空，
+        让插件安静地跳过，而不是每 3 分钟抛一次鉴权异常。
+        """
+        if not self.has_cookie:
+            return []
+        payload = await self._get_json(
+            "/x/msgfeed/at",
+            {
+                "build": 0,
+                "mobi_app": "web",
+                "platform": "web",
+                "ps": max(1, min(30, int(page_size or 10))),
+            },
+            wbi=True,
+        )
+        items = (payload.get("data") or {}).get("items") or []
+        return [item for item in items if isinstance(item, dict)]
+
     async def relation(self, mid: int) -> dict[str, Any]:
         """查询「我 → 对方」的关注关系；attribute=6 表示互关。"""
         try:
