@@ -206,6 +206,7 @@ class BiliWhalePlugin(Star):
         self._bad_window_warned = False
         self._last_mention_poll = 0.0
         self._mention_lock = asyncio.Lock()
+        self._mention_task: asyncio.Task | None = None
         self._start_ticker()
 
     # ── 生命周期 ─────────────────────────────────────────────────────────
@@ -231,9 +232,7 @@ class BiliWhalePlugin(Star):
 
     async def initialize(self) -> None:
         """AstrBot 实例化完成后调用；迟到的定时器在这里补起。"""
-        if (self._ticker is None or self._ticker.done()) and as_bool(
-            cfg_get(self.config, "rhythm.enabled", True), True
-        ):
+        if (self._ticker is None or self._ticker.done()) and self._automation_enabled():
             self._start_ticker()
 
     async def terminate(self) -> None:
@@ -256,15 +255,8 @@ class BiliWhalePlugin(Star):
 
     # ── 生物钟 ───────────────────────────────────────────────────────────
     async def _tick(self) -> None:
-        try:
-            await self._poll_mentions()
-        except asyncio.CancelledError:
-            raise
-        except (BudgetError, BiliRisk):
-            # 额度用完或风控熔断：安静跳过，等下一次恢复，不刷异常栈。
-            logger.info("[bili-whale] 额度或风控限制中，这一轮跳过 @ 通知")
-        except Exception:
-            logger.exception("[bili-whale] 轮询 @ 通知失败")
+        # @ 轮询单独跑：读懂一条视频可能要一两分钟，不能把生物钟那一刻拖过去。
+        self._spawn_mention_poll()
         if not as_bool(cfg_get(self.config, "rhythm.enabled", True), True):
             return
         if not self._cookie_dict().get("sessdata"):
@@ -715,6 +707,35 @@ class BiliWhalePlugin(Star):
         return ok
 
     # ── B 站 @ 通知 ──────────────────────────────────────────────────────
+    def _automation_enabled(self) -> bool:
+        """生物钟或 @ 通知任一开着，就需要跑定时器。"""
+        return as_bool(cfg_get(self.config, "rhythm.enabled", True), True) or as_bool(
+            cfg_get(self.config, "rhythm.mentions_enabled", True), True
+        )
+
+    def _spawn_mention_poll(self) -> None:
+        if self._mention_task is not None and not self._mention_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(self._mention_poll_guarded(), name="bili-whale-mentions")
+        self._mention_task = task
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _mention_poll_guarded(self) -> None:
+        try:
+            await self._poll_mentions()
+        except asyncio.CancelledError:
+            raise
+        except (BudgetError, BiliRisk):
+            # 额度用完或风控熔断：安静跳过，等下一次恢复，不刷异常栈。
+            logger.info("[bili-whale] 额度或风控限制中，这一轮跳过 @ 通知")
+        except Exception:
+            logger.exception("[bili-whale] 轮询 @ 通知失败")
+
     async def _poll_mentions(self) -> None:
         """轮询 B 站「@我的」，有人 @ 就要么转告、要么直接读懂那条视频。"""
         if not as_bool(cfg_get(self.config, "rhythm.mentions_enabled", True), True):
@@ -925,9 +946,7 @@ class BiliWhalePlugin(Star):
     @filter.command("bili", alias={"养鱼", "鲸鱼"})
     async def bili(self, event: AstrMessageEvent):
         """养鱼刷B站：状态 / 刷一轮 / 看懂视频 / 日报 / 日记 / 配额 / 分享。"""
-        if (self._ticker is None or self._ticker.done()) and as_bool(
-            cfg_get(self.config, "rhythm.enabled", True), True
-        ):
+        if (self._ticker is None or self._ticker.done()) and self._automation_enabled():
             # 兼容"插件在同步上下文里被实例化"的情况：第一次收到指令时补起定时器。
             self._start_ticker()
         tail = _command_tail(event.message_str)

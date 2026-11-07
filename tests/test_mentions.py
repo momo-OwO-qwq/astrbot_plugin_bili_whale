@@ -4,6 +4,7 @@
 认不出 BV 时把原链接带上。
 """
 
+import asyncio
 import importlib
 import sys
 import tempfile
@@ -74,6 +75,24 @@ class MentionsTest(unittest.IsolatedAsyncioTestCase):
         plugin = self.make_plugin(rhythm={"enabled": False, "window": "20:00-24:00"})
         with patch.object(self.mod, "now_local", return_value=datetime(2026, 1, 1, 3, 0)):
             self.assertTrue(plugin._mentions_may_digest())
+
+    # ── 定时器生命周期 ────────────────────────────────────────────────
+    def test_ticker_needed_when_only_mentions_on(self):
+        plugin = self.make_plugin(rhythm={"enabled": False, "mentions_enabled": True})
+        self.assertTrue(plugin._automation_enabled())
+
+    def test_ticker_not_needed_when_both_off(self):
+        plugin = self.make_plugin(rhythm={"enabled": False, "mentions_enabled": False})
+        self.assertFalse(plugin._automation_enabled())
+
+    async def test_mention_poll_runs_as_single_background_task(self):
+        plugin = self.make_plugin()
+        plugin._poll_mentions = AsyncMock()
+        plugin._spawn_mention_poll()
+        first = plugin._mention_task
+        plugin._spawn_mention_poll()
+        self.assertIs(plugin._mention_task, first)
+        await asyncio.wait_for(first, timeout=1)
 
     # ── 轮询 ────────────────────────────────────────────────────────────
     async def test_first_poll_records_baseline_without_pushing(self):
