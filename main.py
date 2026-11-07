@@ -82,7 +82,7 @@ except ImportError:  # 兼容"以单文件方式"加载 main.py 的宿主
     )
 
 PLUGIN_NAME = "astrbot_plugin_bili_whale"
-VERSION = "0.2.2"
+VERSION = "0.2.3"
 
 # B 站 @ 通知：一页最多取这么多；每条通知最多自动读懂这么多条视频；
 # 单条读懂超过这个秒数就放弃（免得卡住整个轮询和生物钟）。

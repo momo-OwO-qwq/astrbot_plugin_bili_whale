@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3 — 2026-11-01
+
+- 修复插件市场审核意见：`core/util.py` 不再使用 Python 内置 `logging`，改为和其他模块一样从 `astrbot.api` 导入 `logger`；离线单测环境自动退化为空日志器，测试与工具脚本行为不变。
+
 ## 0.2.2 — 2026-11-01
 
 - **短链与 av 号**：`bili_video_digest`、`bili_comments`、`bili_post_comment`、`/bili 看`、`/bili 分享` 现在都接受 `b23.tv` 短链和 `av` 号，自动展开成 BV；新增 `core.util.resolve_bvid()` 与 `av2bv()`，工具说明里也写明了「不要回答打不开链接」。

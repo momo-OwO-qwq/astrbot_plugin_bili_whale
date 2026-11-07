@@ -6,14 +6,35 @@
 from __future__ import annotations
 
 import html
-import logging
 import math
 import re
 import unicodedata
 from datetime import date, datetime, timedelta
 from typing import Any, Iterable, Mapping
 
-logger = logging.getLogger("bili_whale.util")
+try:  # AstrBot 插件规范：日志只能用 astrbot.api 的 logger
+    from astrbot.api import logger
+except ImportError:  # 离线单测 / 工具脚本里没有 AstrBot，给一个空日志器
+
+    class _NoopLogger:
+        """只吞日志，不改变任何行为；离线环境也能直接 import 本模块。"""
+
+        def debug(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def info(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def warning(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def error(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def exception(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+    logger = _NoopLogger()
 
 # 控制字符（保留换行/制表）—— 评论区、字幕里偶尔会混进终端控制序列，
 # 拼进提示词或消息前统一清掉。
